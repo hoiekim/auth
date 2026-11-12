@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Only cancel superseded PR pushes: a cancelled push-to-main run leaves a
+  # merged commit without a green check, and CD publishes only green ones.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: auth
+          POSTGRES_PASSWORD: auth
+          POSTGRES_DB: auth
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U auth -d auth"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      TEST_DATABASE_URL: postgres://auth:auth@localhost:5432/auth
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      # Installs the Bun version pinned by `packageManager` in package.json.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test
+
+  # Builds the production image without pushing it, starts it against a real
+  # Postgres and stops it, so a broken Dockerfile, entry point or shutdown
+  # fails the PR instead of CD after merge.
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Build image
+        run: docker build --tag auth:ci .
+
+      - name: Start it against Postgres
+        run: |
+          docker network create ci
+          docker run -d --name db --network ci \
+            -e POSTGRES_USER=auth -e POSTGRES_PASSWORD=auth -e POSTGRES_DB=auth postgres:16-alpine
+          # Docker runs the image's own HEALTHCHECK; only its interval is
+          # shortened, so the status turns within seconds. It keeps failing
+          # while Postgres finishes starting.
+          docker run -d --name auth --network ci --health-interval 1s \
+            -e DATABASE_URL=postgres://auth:auth@db:5432/auth auth:ci
+          for i in $(seq 1 60); do
+            status=$(docker inspect auth --format '{{.State.Health.Status}}')
+            [ "$status" = healthy ] && break
+            sleep 1
+          done
+          docker logs auth
+          if [ "$status" != healthy ]; then
+            echo "::error::the image's HEALTHCHECK never passed (status: $status)"
+            exit 1
+          fi
+
+      # docker stop sends SIGTERM, then SIGKILL after 10 seconds. A clean stop
+      # exits 0 well before that; an unhandled SIGTERM shows as 137 at 10 s.
+      - name: Stop it with SIGTERM
+        run: |
+          start=$(date +%s)
+          docker stop --timeout 10 auth
+          took=$(( $(date +%s) - start ))
+          code=$(docker inspect auth --format '{{.State.ExitCode}}')
+          docker logs auth | tail -n 3
+          echo "exit code $code after ${took}s"
+          if [ "$code" != 0 ] || [ "$took" -ge 10 ]; then
+            echo "::error::the server did not stop cleanly on SIGTERM"
+            exit 1
+          fi

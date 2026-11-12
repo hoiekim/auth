@@ -1,0 +1,6 @@
+# Default code owner. With a branch ruleset that requires code-owner review,
+# only this account's approval satisfies it.
+#
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+* @hoiekim
