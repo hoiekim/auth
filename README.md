@@ -33,22 +33,49 @@ The design documents are the contract. Read them before changing behavior:
 
 ## Status
 
-A scaffold. The service validates its configuration and serves
-`GET /healthz`, which answers 200 when the database answers and 503
-otherwise. Nothing else in the design is built yet;
-[`docs/DESIGN.md`](docs/DESIGN.md) §13 lists the phases.
+Phases 1 to 3 of [`docs/DESIGN.md`](docs/DESIGN.md) §13 are built:
+
+- **Sign-in:** passwords (argon2id, breached-password check), TOTP, recovery
+  codes and passkeys; SSO sessions, devices and sign-out.
+- **OpenID Connect:** the authorization code flow with PKCE, refresh
+  (rotated for public clients), revocation, introspection of app passwords
+  and API keys, userinfo, logout, discovery and JWKS, with Ed25519 keys that
+  rotate every 90 days.
+- **Access:** the services file, one role per user per service, invitations,
+  bot users, and the management API with its scoped calls for apps that
+  manage their own members.
+- **Events** to apps through a Postgres outbox; the audit log; alerts; rate
+  limits shared across copies; hourly housekeeping.
+- **Pages** for sign-in, sign-up, invitations, activation, reset, the account
+  and administration; the break-glass CLI; and
+  [`client/auth-client.ts`](client/auth-client.ts) for apps on Bun or Node.
+
+Phase 4, platform sign-in through token exchange (§12.3), is designed but
+not built, as §3 decides for v1.
 
 ## Configuration
 
 Configuration comes from the environment only. The server refuses to start
 when a value is missing or malformed, and lists every problem.
-[`.env.example`](.env.example) has the same list.
+[`.env.example`](.env.example) has the same list, and
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) §3 what each means for a
+deployment.
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `PORT` | no | `3000` | HTTP listen port |
 | `DATABASE_URL` | yes | — | Postgres connection string for the auth database |
-| `TEST_DATABASE_URL` | tests only | — | A Postgres the database tests connect to; they skip without it |
+| `ISSUER_URL` | yes | — | auth's own origin, the tokens' `iss` |
+| `SERVICES_FILE` | yes | — | Path to the services file (`docs/DESIGN.md` §6) |
+| `AUTH_ENCRYPTION_KEY` | yes | — | 32 bytes, base64; encrypts signing keys and TOTP secrets |
+| `API_KEY_PREFIX` | when a service has `api_key_scopes` | — | Prefix of API keys, for secret scanners |
+| `TRUSTED_PROXIES` | no | none | IPs or CIDR ranges whose `X-Real-IP` is trusted |
+| `SMTP_URL` | yes | — | `smtps://` or `smtp://` (STARTTLS) server for auth's emails |
+| `EMAIL_FROM` | yes | — | The emails' sender |
+| `AUDIT_RETENTION_DAYS` | no | `365` | Days of audit log kept |
+| `ALLOW_ACCOUNT_DELETION` | no | `false` | Whether people may delete their own accounts |
+| `ALERT_WEBHOOK_URL` | no | — | Webhook that receives alerts as `{"text": …}` |
+| `TEST_DATABASE_URL` | tests only | — | A Postgres the database tests use; each test file makes and drops a schema of its own, and they skip without it |
 
 ## Development
 
@@ -57,10 +84,19 @@ Postgres 16.
 
 ```sh
 bun install
-cp .env.example .env    # then point DATABASE_URL at a local database
+cp .env.example .env    # then set DATABASE_URL, AUTH_ENCRYPTION_KEY, SERVICES_FILE
 bun run dev             # restarts on change
 bun run typecheck
 TEST_DATABASE_URL=postgres://auth:auth@localhost:5432/auth bun test
+```
+
+`SMTP_URL` may point at a local mail catcher on a loopback port without TLS.
+The first admin comes from the CLI, which prints an activation link:
+
+```sh
+bun cli.ts user create --username alice --email alice@example.com --access auth:admin --print-link
+bun cli.ts client secret wiki    # a confidential client's secret, printed once
+bun cli.ts help
 ```
 
 ## Contributing
