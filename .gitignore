@@ -1,0 +1,16 @@
+# dependencies
+node_modules/
+
+# local configuration — copy .env.example to .env
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+
+# Tool-specific agent files; each contributor sets up their own, pointing at AGENTS.md
+CLAUDE.md
+CLAUDE.local.md
+GEMINI.md
+.claude/
