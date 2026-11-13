@@ -445,7 +445,7 @@ const auth = createAuthClient({
 });
 
 auth.startLogin(req)            // → { redirectUrl, loginCookie }
-auth.finishLogin(req)           // → { claims, idClaims, refreshToken }  (verifies state, nonce, JWT)
+auth.finishLogin(req)           // → { claims, idClaims, refreshToken }  (verifies state, nonce, JWT, and auth_time against maxAge or prompt=login)
 auth.refresh(refreshToken)      // → { claims } | throws InvalidGrant | throws Unavailable
 auth.verifyAccessToken(jwt)     // → claims   (JWKS cached 1 h; refetched on unknown kid)
 auth.introspect(secret)         // → { sub, username, role, scopes } | null   (cached by SHA-256: fresh 60 s, served stale up to 10 min only while auth is unreachable)
@@ -741,7 +741,7 @@ Counters live in the `throttle` table, so every copy shares them and a restart d
 | Reset, invite and sign-up emails | 3 per hour per address, 10 per hour per IP; the answer is the same whether or not the address exists |
 | Account creation (sign-up on an open service, or a first platform sign-in) | 10 per hour per IP |
 | `/oauth/token` per client | 60 per minute |
-| `/oauth/introspect` per client | 600 per minute. Failures are counted per client (1000 an hour) and per end-user address the client names (10 per 15 minutes; the exception above), so a protocol server's brute-force limits stay effective. Past either, the answer is `429`. |
+| `/oauth/introspect` per client | 600 per minute. Failures are counted per client (1000 an hour) and per end-user address the client names (10 per 15 minutes; the exception above), so a protocol server's brute-force limits stay effective. Past either, the answer is `429`. A back channel through the proxy arrives with the proxy's `X-Real-IP`, the client's own address; that one keys no per-address counter, which would put all the client's users in one bucket. |
 
 ### 9.5 Threats and mitigations
 

@@ -63,7 +63,7 @@ export async function finishRegistration(
 ): Promise<string | null> {
   const sealed = app.crypt.openValue<{ u: string; c: string }>("passkey-reg", typeof registration === "string" ? registration : null);
   if (!sealed || sealed.u !== userId || !isObject(response)) return null;
-  if (!(await once(app.sql, `once:webauthn:${sealed.c}`))) return null;
+  if (!(await once(tx, `once:webauthn:${sealed.c}`))) return null;
   let verified;
   try {
     verified = await verifyRegistrationResponse({

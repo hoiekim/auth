@@ -247,7 +247,7 @@ describe("startLogin", () => {
     expect(loginCookie).toMatch(/^__Host-login=[A-Za-z0-9_-]+; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=300$/);
   });
 
-  test.each(["//evil.example/x", "/\\evil.example", "https://evil.example/", "pages"])(
+  test.each(["//evil.example/x", "/\\evil.example", "https://evil.example/", "pages", "/\t/evil.example/x", "/\n/evil.example", "/x\\..\\..\\evil"])(
     "replaces returnTo %p, which isn't a local path, with /",
     async (returnTo) => {
       const login = await startLogin(client(), { returnTo });
@@ -339,6 +339,25 @@ describe("finishLogin", () => {
     fake.token = () => json(200, { access_token: accessToken(), id_token: accessToken({ nonce: login.q("nonce") }), token_type: "Bearer" });
     const e = await failure(client().finishLogin(callback(`code=c0de&state=${login.q("state")}`, login.cookie)));
     expect(e).toBeInstanceOf(InvalidToken);
+  });
+
+  test("with maxAge, a sign-in older than asked is refused, even if the request lost max_age", async () => {
+    const login = await startLogin(client(), { maxAge: 3600 });
+    fake.token = issueFor(login, { auth_time: nowS() - 2 * 86400 });
+    const e = await failure(client().finishLogin(callback(`code=c0de&state=${login.q("state")}`, login.cookie)));
+    expect(e).toBeInstanceOf(InvalidToken);
+    const fresh = await startLogin(client(), { maxAge: 3600 });
+    fake.token = issueFor(fresh, { auth_time: nowS() - 600 });
+    expect((await client().finishLogin(callback(`code=c0de&state=${fresh.q("state")}`, fresh.cookie))).idClaims.sub).toBe("usr_alice");
+  });
+
+  test("with prompt=login, a sign-in from before the request is refused", async () => {
+    const login = await startLogin(client(), { prompt: "login" });
+    fake.token = issueFor(login, { auth_time: nowS() - 120 });
+    expect(await failure(client().finishLogin(callback(`code=c0de&state=${login.q("state")}`, login.cookie)))).toBeInstanceOf(InvalidToken);
+    const noTime = await startLogin(client(), { prompt: "login" });
+    fake.token = issueFor(noTime, { auth_time: undefined });
+    expect(await failure(client().finishLogin(callback(`code=c0de&state=${noTime.q("state")}`, noTime.cookie)))).toBeInstanceOf(InvalidToken);
   });
 
   test("a code the provider refuses is InvalidGrant", async () => {

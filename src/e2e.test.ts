@@ -140,6 +140,7 @@ describe.skipIf(!TEST_DATABASE_URL)("an app using the client library", () => {
     // The whole family is gone, the newest token included.
     await expect(app.refresh(r1.refreshToken!)).rejects.toBeInstanceOf(InvalidGrant);
     expect(t.alerts.some((a) => a.includes("reused refresh token"))).toBe(true);
+    expect((await t.app.sql`SELECT 1 FROM audit WHERE action = 'refresh.reuse'`).length).toBe(1);
     expect((await outboxEvents(t.app.sql, "tasks")).some((e) => e.type === "session.ended" && e.payload.sid === login.claims.sid)).toBe(true);
   });
 

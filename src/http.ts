@@ -173,6 +173,15 @@ export function clearCookie(name: string): string {
   return `__Host-${name}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0`;
 }
 
+// The request came from one of the issuer's own pages (§9.2): Origin is the
+// issuer's. Under the pages' Referrer-Policy: no-referrer a browser sends
+// `Origin: null` on a same-origin form post and says so in Sec-Fetch-Site,
+// which page scripts can't set. A missing Origin is refused.
+export function fromIssuer(issuer: string, req: Request): boolean {
+  const origin = req.headers.get("Origin");
+  return origin === issuer || (origin === "null" && req.headers.get("Sec-Fetch-Site") === "same-origin");
+}
+
 export function hostCookie(req: Request, name: string): string | null {
   return cookies(req).get(`__Host-${name}`) ?? null;
 }

@@ -2,7 +2,7 @@ import type { SQL } from "bun";
 import type { App } from "./app";
 import { newId, randomToken, safeEqual, sha256 } from "./crypto";
 import { emit, emitSessionEnded } from "./events";
-import { clearCookie, hostCookie, HttpError, setCookie } from "./http";
+import { clearCookie, fromIssuer, hostCookie, HttpError, setCookie } from "./http";
 
 // SSO sessions at the issuer (docs/DESIGN.md §9.2). The cookie holds 32
 // random bytes and only their SHA-256 is stored. A session lasts 7 days idle
@@ -122,9 +122,17 @@ export async function endSession(tx: SQL, app: App, sessionId: string): Promise<
   await tx`DELETE FROM sessions WHERE id = ${sessionId}`;
 }
 
+// Serializes everything that ends or extends a refresh-token family, taken
+// before any of its rows is locked: otherwise a rotation in flight could
+// insert a token an ending UPDATE never sees.
+export async function lockFamily(tx: SQL, familyId: string): Promise<void> {
+  await tx`SELECT pg_advisory_xact_lock(hashtext(${`family:${familyId}`}))`;
+}
+
 // Ends a public client's refresh-token family, which outlives the SSO session
 // it started from; its id is the `sid` of the tokens it issued.
 export async function endFamily(tx: SQL, app: App, familyId: string, userId: string): Promise<boolean> {
+  await lockFamily(tx, familyId);
   const rows: { client_id: string }[] = await tx`
     UPDATE refresh_tokens SET revoked_at = now()
     WHERE family_id = ${familyId} AND user_id = ${userId} AND session_id IS NULL AND revoked_at IS NULL
@@ -161,7 +169,7 @@ export function requireCsrf(app: App, req: Request, session: Session): void {
 }
 
 export function requireOrigin(app: App, req: Request): void {
-  if (req.headers.get("Origin") !== app.config.issuer) {
+  if (!fromIssuer(app.config.issuer, req)) {
     throw new HttpError(403, "forbidden", "The request's Origin is not this issuer.");
   }
 }

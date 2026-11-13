@@ -1,7 +1,7 @@
 import type { SQL } from "bun";
 import { roleAtSignIn, roleOf } from "./access";
 import type { App } from "./app";
-import { audit } from "./audit";
+import { audit, clientActor } from "./audit";
 import { authenticateClient } from "./clients";
 import { base64url, newId, randomToken, safeEqual, sha256 } from "./crypto";
 import { factorsOf } from "./factors";
@@ -13,7 +13,7 @@ import { parseIp, formatIp } from "./net";
 import { h, messagePage, page } from "./pages/layout";
 import type { Ctx } from "./server";
 import type { Client, Service } from "./services";
-import { clearSessionCookie, endSession, hasMfa, loadSession, touch } from "./sessions";
+import { clearSessionCookie, endFamily, endSession, hasMfa, loadSession, lockFamily, touch } from "./sessions";
 import { hit, peek, tooMany } from "./throttle";
 import { transaction } from "./tx";
 
@@ -302,6 +302,9 @@ async function refreshGrant(app: App, client: Client, service: Service, form: UR
   const hash = sha256(presented.length <= 256 ? presented : "");
 
   const result = await transaction(app.sql, async (tx, after) => {
+    const [found] = await tx`SELECT family_id FROM refresh_tokens WHERE token_hash = ${hash}`;
+    if (!found) return null;
+    await lockFamily(tx, found.family_id);
     const [rt] = await tx`
       SELECT r.family_id, r.session_id, r.user_id, r.client_id, r.revoked_at IS NOT NULL AS revoked,
              r.expires_at > now() AS live, r.rotated_at IS NOT NULL AS rotated,
@@ -365,13 +368,18 @@ export async function revoke({ req, deps: app }: Ctx<App>): Promise<Response> {
   if (!presented) throw new HttpError(400, "invalid_request", "token is required.");
   const hash = sha256(presented.length <= 256 ? presented : "");
   await app.sql.begin(async (tx) => {
-    const [rt] = await tx`
-      UPDATE refresh_tokens SET revoked_at = now()
-      WHERE token_hash = ${hash} AND client_id = ${client.id} AND revoked_at IS NULL
-      RETURNING family_id, user_id`;
-    if (rt && client.type === "public") {
-      await tx`UPDATE refresh_tokens SET revoked_at = now() WHERE family_id = ${rt.family_id} AND revoked_at IS NULL`;
+    const [found] = await tx`
+      SELECT family_id, user_id FROM refresh_tokens WHERE token_hash = ${hash} AND client_id = ${client.id} AND revoked_at IS NULL`;
+    if (!found) return;
+    if (client.type === "public") {
+      // The app is signing a device out: its service hears of it like any
+      // other ended session.
+      await endFamily(tx, app, found.family_id, found.user_id);
+    } else {
+      await lockFamily(tx, found.family_id);
+      await tx`UPDATE refresh_tokens SET revoked_at = now() WHERE token_hash = ${hash} AND revoked_at IS NULL`;
     }
+    await audit(tx, { actor: clientActor(client.service), action: "token.revoke", userId: found.user_id, detail: { client: client.id } });
   });
   return json(200, {});
 }
@@ -386,7 +394,7 @@ const FAILURES_PER_ADDRESS_WINDOW = 15 * 60;
 const FAILURES_PER_CLIENT = 1000;
 const FAILURES_PER_CLIENT_WINDOW = 60 * 60;
 
-export async function introspect({ req, deps: app }: Ctx<App>): Promise<Response> {
+export async function introspect({ req, ip, deps: app }: Ctx<App>): Promise<Response> {
   const form = await readForm(req);
   const client = await authenticateClient(app, req, form, false);
   const limit = await hit(app.sql, `client:${client.id}:introspect`, INTROSPECT_PER_MINUTE, 60);
@@ -395,9 +403,14 @@ export async function introspect({ req, deps: app }: Ctx<App>): Promise<Response
   if (!secret) throw new HttpError(400, "invalid_request", "token is required.");
 
   // Only for this counter: the client vouches for its own end user's address.
+  // Through the proxy, the proxy has replaced it with the client's own
+  // address (it is then the request's address too), and keying on it would
+  // put all the client's users in one bucket; the per-client counter still
+  // applies.
   const named = req.headers.get("X-Real-IP");
   const parsed = named ? parseIp(named) : null;
-  const addressKey = parsed ? `client:${client.id}:introspect-fail:${formatIp(parsed)}` : null;
+  const address = parsed ? formatIp(parsed) : null;
+  const addressKey = address && address !== ip ? `client:${client.id}:introspect-fail:${address}` : null;
   const clientKey = `client:${client.id}:introspect-fail`;
   for (const [key, max, window] of [
     [clientKey, FAILURES_PER_CLIENT, FAILURES_PER_CLIENT_WINDOW],

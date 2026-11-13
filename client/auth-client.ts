@@ -442,14 +442,18 @@ export function createAuthClient(options: AuthClientOptions): AuthClient {
       if (opts.loginHint !== undefined) params.login_hint = opts.loginHint;
       for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value);
       const returnTo = isLocalPath(opts.returnTo) ? opts.returnTo : "/";
-      const value = Buffer.from(JSON.stringify({ state, nonce, verifier, returnTo, iat: Math.floor(now() / 1000) })).toString("base64url");
+      // What was asked of the sign-in travels with the cookie: the browser
+      // carries the request and can drop max_age or prompt from it, so the
+      // ID token's auth_time is checked against them at the callback.
+      const login = { state, nonce, verifier, returnTo, iat: Math.floor(now() / 1000), maxAge: opts.maxAge, fresh: opts.prompt === "login" };
+      const value = Buffer.from(JSON.stringify(login)).toString("base64url");
       return { redirectUrl: url.toString(), loginCookie: `${LOGIN_COOKIE}=${value}; ${COOKIE_ATTRIBUTES}; Max-Age=${LOGIN_TTL_S}` };
     },
 
     async finishLogin(req) {
       const raw = readCookie(req.headers.get("cookie"), LOGIN_COOKIE);
       const saved = raw !== undefined && B64URL.test(raw) ? parseSegment(raw) : undefined;
-      const { state, nonce, verifier, returnTo, iat } = saved ?? {};
+      const { state, nonce, verifier, returnTo, iat, maxAge, fresh } = saved ?? {};
       if (typeof state !== "string" || typeof nonce !== "string" || typeof verifier !== "string" || typeof iat !== "number") {
         throw new LoginError("no_login_cookie");
       }
@@ -470,6 +474,14 @@ export function createAuthClient(options: AuthClientOptions): AuthClient {
       if (Array.isArray(idClaims.aud) && idClaims.aud.length > 1 && idClaims.azp !== clientId) throw new InvalidToken("wrong authorized party");
       if (typeof idClaims.nonce !== "string" || !sameDigest(idClaims.nonce, nonce)) throw new InvalidToken("nonce mismatch");
       if (idClaims.sub !== claims.sub) throw new InvalidToken("the ID token names another subject");
+      // OIDC Core §3.1.3.7: with max_age or prompt=login, the sign-in must be
+      // as recent as asked, whatever the authorization request ended up as.
+      if (typeof maxAge === "number" || fresh === true) {
+        const authTime = idClaims.auth_time;
+        if (typeof authTime !== "number") throw new InvalidToken("no auth_time");
+        if (typeof maxAge === "number" && t - authTime > maxAge + LEEWAY_S) throw new InvalidToken("the sign-in is older than max_age");
+        if (fresh === true && authTime < iat - LEEWAY_S) throw new InvalidToken("the sign-in is older than the login request");
+      }
       return {
         claims,
         idClaims: idClaims as IdClaims,
@@ -580,8 +592,14 @@ function readCookie(header: string | null, name: string): string | undefined {
   return undefined;
 }
 
+// A path on the app's own origin. URL parsers drop tabs and newlines and read
+// a backslash as a slash, so "/\t/evil.example" would lead off-site: any
+// control character, space or backslash is refused, and the path must still
+// resolve to the same origin.
 function isLocalPath(path: unknown): path is string {
-  return typeof path === "string" && path.startsWith("/") && !path.startsWith("//") && !path.startsWith("/\\");
+  if (typeof path !== "string" || path.length > 2048 || !path.startsWith("/") || path.startsWith("//")) return false;
+  if (/[\u0000-\u0020\u007f\\]/.test(path)) return false;
+  return new URL(path, "https://app.invalid").origin === "https://app.invalid";
 }
 
 function sameDigest(a: string, b: string): boolean {

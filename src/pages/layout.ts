@@ -1,6 +1,6 @@
 import type { App } from "../app";
 import { randomToken, safeEqual } from "../crypto";
-import { hostCookie, html, HttpError, pageCsp, setCookie, type ResponseExtras } from "../http";
+import { fromIssuer, hostCookie, html, HttpError, pageCsp, setCookie, type ResponseExtras } from "../http";
 
 // Server-rendered pages (docs/DESIGN.md §5.1 front channel). Every value is
 // escaped; scripts and styles come only from /assets, as the CSP requires.
@@ -67,17 +67,8 @@ export function hiddenCsrf(token: string): string {
   return `<input type="hidden" name="csrf" value="${h(token)}">`;
 }
 
-// The request came from one of this issuer's own pages. Under the pages'
-// Referrer-Policy: no-referrer, a browser sends `Origin: null` on a
-// same-origin form post, and says so in Sec-Fetch-Site, which page scripts
-// can't set (§9.2). A missing Origin is refused.
-export function fromThisSite(app: App, req: Request): boolean {
-  const origin = req.headers.get("Origin");
-  return origin === app.config.issuer || (origin === "null" && req.headers.get("Sec-Fetch-Site") === "same-origin");
-}
-
 export function checkForm(app: App, req: Request, form: URLSearchParams): void {
-  if (!fromThisSite(app, req)) throw new HttpError(403, "forbidden", "This form was not sent from this site.");
+  if (!fromIssuer(app.config.issuer, req)) throw new HttpError(403, "forbidden", "This form was not sent from this site.");
   const cookie = hostCookie(req, FORM_COOKIE) ?? "";
   const sent = form.get("csrf") ?? "";
   if (!cookie || !safeEqual(cookie, sent)) throw new HttpError(403, "forbidden", "This form has expired. Go back, reload the page and try again.");

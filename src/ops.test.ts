@@ -4,10 +4,12 @@ import { runCli } from "./cli";
 import { emit } from "./events";
 import { deliverDue } from "./events";
 import { housekeep } from "./jobs";
-import { rotateKeys } from "./keys";
+import { KeyStore, rotateKeys } from "./keys";
+import { SQL } from "bun";
 import type { MailMessage } from "./mail";
 import { migrate } from "./migrate";
 import { Browser, makeUser, TEST_DATABASE_URL, testApp, testDb, type TestApp, type TestDb } from "./testing/harness";
+import { random } from "./crypto";
 
 // Background work, keys, migrations and the break-glass CLI
 // (docs/DESIGN.md §7.4, §8, §9.3, §9.6).
@@ -78,6 +80,27 @@ describe.skipIf(!TEST_DATABASE_URL)("operations", () => {
       const [row] = await t.app.sql`SELECT failed_at IS NOT NULL AS failed FROM outbox`;
       expect(row.failed).toBe(true);
       expect(t.alerts).toEqual(["auth: gave up delivering an event to wiki after 1 attempts"]);
+    });
+
+    test("five transactions emitting at once, with the key cache cold, don't wedge the 5-connection pool", async () => {
+      await t.app.sql`DELETE FROM outbox`;
+      const realKeys = t.app.keys;
+      t.app.keys = new KeyStore(t.app.sql, t.app.crypt);
+      try {
+        const all = Promise.all(
+          Array.from({ length: 5 }, (_, i) =>
+            t.app.sql.begin(async (tx) => {
+              await tx`SELECT 1`;
+              await Bun.sleep(20);
+              await emit(tx, t.app, "wiki", "session.ended", { sid: `ses_${i}` });
+            }),
+          ),
+        );
+        expect(await Promise.race([all.then(() => "done"), Bun.sleep(5000).then(() => "stuck")])).toBe("done");
+        expect(await t.app.sql`SELECT 1 FROM outbox`).toHaveLength(5);
+      } finally {
+        t.app.keys = realKeys;
+      }
     });
 
     test("two copies delivering at once never send the same event twice", async () => {
@@ -157,17 +180,40 @@ describe.skipIf(!TEST_DATABASE_URL)("operations", () => {
       INSERT INTO sessions (id, user_id, token_hash, auth_time, amr, expires_at, ends_at)
       VALUES ('ses_dead', ${id}, '\\x01', now(), '{pwd}', now() - interval '1 second', now() + interval '1 day'),
              ('ses_live', ${id}, '\\x02', now(), '{pwd}', now() + interval '1 day', now() + interval '1 day')`;
-    const results = await Promise.all([housekeep(t.app.sql, 365), housekeep(t.app.sql, 365)]);
-    expect(results.filter(Boolean).length).toBeGreaterThanOrEqual(1);
+    expect(await housekeep(t.app.sql, 365)).toBe(true);
     expect((await t.app.sql`SELECT key FROM throttle WHERE key IN ('old', 'new')`).map((r: { key: string }) => r.key)).toEqual(["new"]);
     expect((await t.app.sql`SELECT action FROM audit WHERE action IN ('ancient', 'recent')`).map((r: { action: string }) => r.action)).toEqual(["recent"]);
     expect((await t.app.sql`SELECT id FROM sessions WHERE id IN ('ses_dead', 'ses_live')`).map((r: { id: string }) => r.id)).toEqual(["ses_live"]);
   });
 
-  test("migrations apply once when two copies start together", async () => {
-    await Promise.all([migrate(t.app.sql), migrate(t.app.sql), migrate(t.app.sql)]);
-    const rows = await t.app.sql`SELECT version FROM schema_migrations`;
-    expect(rows.map((r: { version: string }) => r.version)).toEqual(["0001_initial"]);
+  test("housekeeping skips its run while another copy holds the lock", async () => {
+    const other = await t.app.sql.reserve();
+    try {
+      await other`SELECT pg_advisory_lock(hashtext('auth.housekeeping'))`;
+      expect(await housekeep(t.app.sql, 365)).toBe(false);
+      await other`SELECT pg_advisory_unlock(hashtext('auth.housekeeping'))`;
+    } finally {
+      other.release();
+    }
+    expect(await housekeep(t.app.sql, 365)).toBe(true);
+  });
+
+  test("migrations apply once when three copies start together on an empty database", async () => {
+    const schema = `t_${random(6).toString("hex")}`;
+    const admin = new SQL(TEST_DATABASE_URL!, { max: 1 });
+    await admin.unsafe(`CREATE SCHEMA ${schema}`);
+    const copies = Array.from({ length: 3 }, () => new SQL(TEST_DATABASE_URL!, { max: 2, connection: { search_path: schema } }));
+    try {
+      const applied: string[] = [];
+      await Promise.all(copies.map((c) => migrate(c, (line) => applied.push(line))));
+      expect(applied).toEqual(["migration 0001_initial applied"]);
+      const rows = await copies[0]!`SELECT version FROM schema_migrations`;
+      expect(rows.map((r: { version: string }) => r.version)).toEqual(["0001_initial"]);
+    } finally {
+      await Promise.all(copies.map((c) => c.close()));
+      await admin.unsafe(`DROP SCHEMA ${schema} CASCADE`);
+      await admin.close();
+    }
   });
 
   describe("the break-glass CLI (§9.6)", () => {

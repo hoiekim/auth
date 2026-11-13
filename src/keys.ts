@@ -40,16 +40,18 @@ export class KeyStore {
 
   // Re-read after CACHE_MS, so a rotation another copy made shows up here
   // within a minute, well inside the day a new key is published early.
-  async refresh(force = false): Promise<void> {
+  // Inside a transaction, `via` is that transaction: waiting for another pool
+  // connection while holding one could wedge the pool.
+  async refresh(force = false, via: SQL = this.sql): Promise<void> {
     if (!force && Date.now() - this.#loadedAt < CACHE_MS) return;
-    this.#loading ??= this.#load().finally(() => {
+    this.#loading ??= this.#load(via).finally(() => {
       this.#loading = null;
     });
     await this.#loading;
   }
 
-  async #load(): Promise<void> {
-    const rows: { kid: string; public_jwk: PublicJwk; private_key_enc: Buffer; signs: boolean }[] = await this.sql`
+  async #load(via: SQL): Promise<void> {
+    const rows: { kid: string; public_jwk: PublicJwk; private_key_enc: Buffer; signs: boolean }[] = await via`
       SELECT kid, public_jwk, private_key_enc,
              sign_from = (SELECT max(sign_from) FROM signing_keys WHERE sign_from <= now()) AS signs
       FROM signing_keys
@@ -71,8 +73,8 @@ export class KeyStore {
     this.#loadedAt = Date.now();
   }
 
-  async signer(): Promise<Signer> {
-    await this.refresh();
+  async signer(via: SQL = this.sql): Promise<Signer> {
+    await this.refresh(false, via);
     const key = this.#published.find((k) => k.kid === this.#signerKid);
     if (!key) throw new Error("no signing key");
     key.privateKey ??= createPrivateKey({ key: this.crypt.decrypt(key.sealed, key.kid), format: "der", type: "pkcs8" });

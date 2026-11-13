@@ -21,7 +21,7 @@ type EventDeps = Pick<App, "config" | "services" | "keys">;
 // service without an events_url relies on the pull (§7.1), so it gets none.
 export async function emit(tx: SQL, app: EventDeps, service: string, type: EventType, payload: Record<string, unknown>): Promise<void> {
   if (!app.services.get(service)?.eventsUrl) return;
-  const signer = await app.keys.signer();
+  const signer = await app.keys.signer(tx);
   const token = signJwt(
     "secevent+jwt",
     {
