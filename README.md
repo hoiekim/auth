@@ -95,3 +95,7 @@ Code review by agents follows [`AGENTS.md`](AGENTS.md).
 ## Security
 
 Report vulnerabilities privately: see [`SECURITY.md`](SECURITY.md).
+
+## License
+
+[Apache License 2.0](LICENSE).

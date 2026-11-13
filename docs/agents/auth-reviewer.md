@@ -188,7 +188,7 @@ Exceptions: JSDoc on public / abstraction surfaces, TODO markers, one-line WHY w
 
 ### L. Dependencies
 
-The runtime dependency set is deliberately empty: Bun's built-ins cover SQL, HTTP and crypto. DESIGN.md §9.1 allows one runtime dependency, for WebAuthn verification. Any other runtime dependency needs a stated reason in the body: in this service, every dependency is code that runs with every credential in reach. Check a new package's license (`node_modules/<pkg>/package.json` `license` and its `LICENSE`); AGPL, non-commercial or research-only is HIGH.
+The runtime dependency set is deliberately empty: Bun's built-ins cover SQL, HTTP and crypto. DESIGN.md §9.1 allows one runtime dependency, for WebAuthn verification. Any other runtime dependency needs a stated reason in the body: in this service, every dependency is code that runs with every credential in reach. The product is Apache 2.0 (`LICENSE`). Check a new package's license (`node_modules/<pkg>/package.json` `license` and its `LICENSE`); one that is incompatible with Apache 2.0 (AGPL, non-commercial, research-only) is HIGH.
 
 ### M. Public-repo hygiene — TWO axes, don't collapse them
 
