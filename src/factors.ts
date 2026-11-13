@@ -97,6 +97,15 @@ export async function useRecoveryCode(sql: SQL, userId: string | null, input: st
   return code !== null && rows.length === 1;
 }
 
+// Whether an unused code matches, without using it: so a step that can
+// still fail after the code is checked doesn't spend it.
+export async function recoveryCodeValid(sql: SQL, userId: string | null, input: string): Promise<boolean> {
+  const code = canonicalRecoveryCode(input);
+  const rows = await sql`
+    SELECT 1 FROM recovery_codes WHERE user_id = ${userId ?? ""} AND code_hash = ${sha256(code ?? input)} AND used_at IS NULL`;
+  return code !== null && rows.length === 1;
+}
+
 // A sign-in's second factor: a TOTP code or, failing that, a recovery code.
 export async function checkSecondFactor(sql: SQL, app: App, userId: string, input: string): Promise<"otp" | "recovery" | null> {
   const value = input.trim();

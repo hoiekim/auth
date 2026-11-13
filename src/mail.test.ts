@@ -12,6 +12,8 @@ interface FakeOptions {
   // An answer for a command line, or undefined for the default one.
   answer?: (line: string) => string | undefined;
   tlsCert?: { key: string; cert: string };
+  // Serve TLS from the first byte (smtps://) with this certificate.
+  implicitTls?: { key: string; cert: string };
 }
 
 interface Fake {
@@ -35,12 +37,15 @@ async function fakeSmtp(opts: FakeOptions = {}): Promise<Fake> {
     closed: new Promise<void>((resolve) => (markClosed = resolve)),
     stop: () => server.close(),
   };
-  const server = net.createServer((socket) => {
+  const onConnection = (socket: net.Socket) => {
     fake.connections++;
     socket.on("close", () => markClosed());
-    serve(socket, false);
+    serve(socket, opts.implicitTls !== undefined);
     if (opts.greet !== false) socket.write("220 fake.test ESMTP\r\n");
-  });
+  };
+  const server: net.Server = opts.implicitTls
+    ? tls.createServer({ key: opts.implicitTls.key, cert: opts.implicitTls.cert }, onConnection).on("tlsClientError", () => {})
+    : net.createServer(onConnection);
 
   function serve(stream: net.Socket, overTls: boolean) {
     let buffer = "";
@@ -295,11 +300,13 @@ describe("smtpMailer with STARTTLS", () => {
   describe.skipIf(!openssl)("against a server with a certificate", () => {
     const dir = mkdtempSync(join(tmpdir(), "mail-test-"));
     afterAll(() => rmSync(dir, { recursive: true, force: true }));
-    const certificate = () => {
+    // For 127.0.0.1 by default; `san` names another host, to check that a
+    // trusted certificate for the wrong name is refused.
+    const certificate = (san = "IP:127.0.0.1") => {
       const made = Bun.spawnSync([
         openssl ?? "openssl",
         "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-days", "1",
-        "-subj", "/CN=localhost", "-addext", "subjectAltName=IP:127.0.0.1",
+        "-subj", "/CN=localhost", "-addext", `subjectAltName=${san}`,
         "-keyout", join(dir, "key.pem"), "-out", join(dir, "cert.pem"),
       ]);
       if (made.exitCode !== 0) throw new Error("openssl failed");
@@ -323,6 +330,23 @@ describe("smtpMailer with STARTTLS", () => {
       ]);
     });
 
+    test("smtps:// speaks TLS from the first byte and authenticates over it", async () => {
+      const cert = certificate();
+      const fake = await started({ extensions: ["AUTH PLAIN"], implicitTls: cert });
+      const settings: SmtpSettings = { host: "127.0.0.1", port: fake.port, secure: "implicit", username: "alice", password: "s3cret-pw" };
+      await smtpMailer(settings, FROM, { ca: cert.cert }).send({ to: "bob@example.com", subject: "Hi", text: "Hello" });
+      expect(fake.commands.slice(0, 2)).toEqual(["tls EHLO example.com", `tls AUTH PLAIN ${Buffer.from("\0alice\0s3cret-pw").toString("base64")}`]);
+    });
+
+    test.each(["implicit", "starttls"] as const)("over %s TLS, a trusted certificate for another host is refused before credentials", async (secure) => {
+      const cert = certificate("DNS:other.example.test");
+      const fake = await started(secure === "implicit" ? { extensions: ["AUTH PLAIN"], implicitTls: cert } : { extensions: ["AUTH PLAIN"], tlsCert: cert });
+      const settings: SmtpSettings = { host: "127.0.0.1", port: fake.port, secure, username: "alice", password: "s3cret-pw" };
+      const message = await rejection(smtpMailer(settings, FROM, { ca: cert.cert }).send({ to: "bob@example.com", subject: "Hi", text: "x" }));
+      expect(message).toMatch(/^smtp: connection failed/);
+      expect(fake.commands.filter((c) => c.includes("AUTH"))).toEqual([]);
+    });
+
     test("refuses a certificate it doesn't trust, before sending credentials", async () => {
       const fake = await started({ extensions: ["AUTH PLAIN"], tlsCert: certificate() });
       const settings: SmtpSettings = { host: "127.0.0.1", port: fake.port, secure: "starttls", username: "alice", password: "s3cret-pw" };
@@ -331,6 +355,25 @@ describe("smtpMailer with STARTTLS", () => {
       expect(message).not.toContain("s3cret-pw");
       expect(fake.commands.filter((c) => c.startsWith("tls "))).toEqual([]);
     });
+  });
+});
+
+describe("a server's replies are bounded", () => {
+  test("a multi-line reply past 64 KiB is refused, however it is split into lines", async () => {
+    const server = net.createServer((socket) => {
+      socket.on("error", () => {});
+      const line = `220-${"x".repeat(1000)}\r\n`;
+      for (let i = 0; i < 100; i++) socket.write(line);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const port = (server.address() as net.AddressInfo).port;
+      expect(await rejection(smtpMailer(plain(port), FROM).send({ to: "bob@example.com", subject: "Hi", text: "x" }))).toBe(
+        "smtp: the server's reply is too long",
+      );
+    } finally {
+      server.close();
+    }
   });
 });
 
@@ -356,6 +399,8 @@ describe("parseSmtpUrl", () => {
     ["smtp://127.0.0.1:2525", { host: "127.0.0.1", port: 2525, secure: "none" }],
     ["smtp://[::1]:25", { host: "::1", port: 25, secure: "none" }],
     ["smtps://localhost", { host: "localhost", port: 465, secure: "implicit" }],
+    // Not an address literal, so not loopback: it would go through DNS.
+    ["smtp://127.0.0.300", { host: "127.0.0.300", port: 587, secure: "starttls" }],
     [
       "smtp://alice%40example.com:p%40ss%3Aword@mail.example.com:2587",
       { host: "mail.example.com", port: 2587, secure: "starttls", username: "alice@example.com", password: "p@ss:word" },
@@ -389,7 +434,7 @@ describe("parseSmtpUrl", () => {
 });
 
 describe("isEmailAddress", () => {
-  test.each(["alice@example.com", "a.b+c@sub.example.com", "o'brien@example.co.uk", "x_y-z@ex-ample.test"])("accepts %p", (a) => {
+  test.each(["alice@example.com", "a.b+c@sub.example.com", "o'brien@mail.example.org", "x_y-z@ex-ample.test"])("accepts %p", (a) => {
     expect(isEmailAddress(a)).toBe(true);
   });
 

@@ -236,7 +236,7 @@ The fields of a service:
 | `default_role` | with `signup: "open"` | The role an open sign-up receives; one of `roles`. |
 | `manages_own_members` | no (`false`) | The service's own client may call the ★ endpoints of §7.5 for this service. |
 | `api_key_scopes`, `app_password_scopes` | no (none) | The scopes API keys and app passwords for this service may carry. A service with neither gets neither kind of credential. |
-| `clients` | yes | One or more, each with an `id` unique across every service, a `type` (`confidential` or `public`), `redirect_uris` and optional `post_logout_redirect_uris`. Redirect URIs are absolute: `https`, `http` only for `localhost`, or a private-use scheme for a public client (RFC 8252). |
+| `clients` | yes | One or more, each with an `id` unique across every service, a `type` (`confidential` or `public`), `redirect_uris` and optional `post_logout_redirect_uris`. Redirect URIs are absolute: `https`, `http` only for a loopback host (`localhost`, `127.0.0.1` or `[::1]`, RFC 8252 §7.3), or a private-use scheme for a public client (RFC 8252). |
 | `events_url` | no | Where §7.4's events go. A service without one relies on the pull (§7.1), and on reading its pending invites (§12.6). |
 
 The file is checked at start, like every other setting: a file that breaks any rule above stops the start, and every problem is listed at once.
@@ -399,7 +399,7 @@ JSON under `/v1`. The account and admin pages call the same handlers. Callers ar
 | `GET` / `POST` / `DELETE /v1/me/api-keys[/{id}]` | `{name, service, scopes, expires_at?}`; the secret is shown once |
 | `GET /v1/me/access` | Services and roles, with each service's `app_password_scopes` and `api_key_scopes` |
 
-Changing password, MFA, passkeys, app passwords or keys, or the recovery email, and deleting the account, need a sign-in in the last 15 minutes. Otherwise the answer is `403 {"error":"reauth_required"}` and the UI asks for the password or passkey again.
+Changing password, MFA, passkeys, app passwords or keys, or the recovery email, and deleting the account, need a sign-in in the last 15 minutes, and one that used the second factor when the account has one: otherwise a password alone could enroll a factor of its own or mint a protocol credential. Otherwise the answer is `403 {"error":"reauth_required"}` and the UI asks for the password or passkey again.
 
 **Administration** (`auth:admin`; the rows marked ★ also accept a service's own client, for its own service only, when it sets `manages_own_members`)
 
@@ -697,7 +697,7 @@ CREATE UNLOGGED TABLE throttle (                      -- shared across every cop
 
 **CSRF on auth's pages** has three layers:
 1. A per-session synchronizer token, in forms and in the `X-CSRF-Token` header.
-2. `Origin` must equal the issuer's origin on every non-GET request. A missing `Origin` is refused.
+2. `Origin` must equal the issuer's origin on every non-GET request. A missing `Origin` is refused. Under `Referrer-Policy: no-referrer` a browser sends `Origin: null` on a same-origin form post, and says so with `Sec-Fetch-Site: same-origin`, which page scripts can't set; that pair counts as the issuer's origin.
 3. `SameSite=Lax`. Sign-in forms get a pre-session CSRF cookie, which blocks login CSRF.
 
 **Headers on every page:**

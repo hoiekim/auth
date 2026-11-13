@@ -76,6 +76,63 @@ describe.skipIf(!TEST_DATABASE_URL)("management API", () => {
       expect((await b.api("PATCH", "/v1/me", { name: "Stale" })).status).toBe(200);
     });
 
+    test("with a second factor on the account, a password-only session changes no credential", async () => {
+      // A passkey and no TOTP: the password alone signs in, without mfa.
+      const id = await makeUser(t, { username: "pkonly", password: PW, access: { auth: "admin", mailbox: "user", tasks: "user" } });
+      await t.app.sql`INSERT INTO passkeys (id, user_id, credential_id, public_key, name) VALUES ('pk_x', ${id}, '\\x0102', '\\x03', 'laptop')`;
+      const b = new Browser(t);
+      await b.signIn("pkonly", PW);
+      for (const [method, path, body] of [
+        ["POST", "/v1/me/totp", {}],
+        ["POST", "/v1/me/passkeys", {}],
+        ["DELETE", "/v1/me/passkeys/pk_x", undefined],
+        ["POST", "/v1/me/recovery-codes", {}],
+        ["POST", "/v1/me/app-passwords", { name: "x", service: "mailbox", scopes: ["imap"] }],
+        ["POST", "/v1/me/api-keys", { name: "x", service: "tasks", scopes: ["tasks:read"] }],
+        ["POST", "/v1/me/password", { current: PW, new: "another long password" }],
+        ["PATCH", "/v1/me", { email: "pk@example.org" }],
+      ] as const) {
+        const res = await b.api(method, path, body);
+        expect([path, res.status]).toEqual([path, 403]);
+        expect((await res.json() as any).error).toBe("reauth_required");
+      }
+      expect((await b.api("GET", "/v1/users")).status).toBe(403);
+      const [s] = await t.app.sql`SELECT amr FROM sessions WHERE user_id = ${id}`;
+      expect(s.amr).toEqual(["pwd"]);
+    });
+
+    test("every credential change, removals included, needs a recent sign-in", async () => {
+      const id = await makeUser(t, { username: "stale2", password: PW, access: { mailbox: "user" } });
+      const b = new Browser(t);
+      await b.signIn("stale2", PW);
+      const pw = await (await b.api("POST", "/v1/me/app-passwords", { name: "x", service: "mailbox", scopes: ["imap"] })).json() as any;
+      await t.app.sql`INSERT INTO passkeys (id, user_id, credential_id, public_key, name) VALUES ('pk_y', ${id}, '\\x0405', '\\x06', 'phone')`;
+      await t.app.sql`UPDATE sessions SET auth_time = now() - interval '16 minutes', amr = '{swk,user,mfa}' WHERE user_id = ${id}`;
+      for (const [method, path] of [
+        ["DELETE", "/v1/me/totp"],
+        ["DELETE", "/v1/me/passkeys/pk_y"],
+        ["DELETE", `/v1/me/app-passwords/${pw.id}`],
+        ["DELETE", "/v1/me"],
+      ] as const) {
+        expect([path, (await b.api(method, path)).status]).toEqual([path, 403]);
+      }
+      // An admin's changes to a bot's credentials too.
+      const bot = await makeUser(t, { username: "stale-bot", kind: "bot", ownerId: rootId, access: { mailbox: "user" } });
+      await t.app.sql`UPDATE sessions SET auth_time = now() - interval '16 minutes' WHERE user_id = ${rootId}`;
+      const res = await root.api("POST", `/v1/users/${bot}/app-passwords`, { name: "x", service: "mailbox", scopes: ["smtp"] });
+      expect((await res.json() as any).error).toBe("reauth_required");
+      await t.app.sql`UPDATE sessions SET auth_time = now() WHERE user_id = ${rootId}`;
+    });
+
+    test("guessing the current password is held to the sign-in limits", async () => {
+      await makeUser(t, { username: "guessed", password: PW });
+      const b = new Browser(t, "192.0.2.77");
+      await b.signIn("guessed", PW);
+      for (let i = 0; i < 5; i++) expect((await b.api("POST", "/v1/me/password", { current: `wrong ${i}`, new: "a brand new password" })).status).toBe(403);
+      const res = await b.api("POST", "/v1/me/password", { current: PW, new: "a brand new password" });
+      expect(res.status).toBe(429);
+    });
+
     test("an admin needs a session that used MFA; anyone else is refused", async () => {
       await makeUser(t, { username: "halfadmin", password: PW, access: { auth: "admin" } });
       const half = new Browser(t);
@@ -126,9 +183,13 @@ describe.skipIf(!TEST_DATABASE_URL)("management API", () => {
       t.mails.length = 0;
       const res = await b.api("PATCH", "/v1/me", { email: "ROOT@example.com" });
       expect(res.status).toBe(200);
+      // What the account reads back is the same as for a free address.
+      expect((await res.json() as any).email_pending).toBe("ROOT@example.com");
+      const free = await (await b.api("PATCH", "/v1/me", { email: "nobody-yet@example.com" })).json() as any;
+      expect(free.email_pending).toBe("nobody-yet@example.com");
       await flush();
       expect(t.mails.map((m) => m.subject)).toContain("Your address was used for another account");
-      expect(t.mails.some((m) => m.text.includes("verify-email"))).toBe(false);
+      expect(t.mails.some((m) => m.to === "ROOT@example.com" && m.text.includes("verify-email"))).toBe(false);
     });
   });
 

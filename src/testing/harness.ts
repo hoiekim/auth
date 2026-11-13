@@ -130,7 +130,7 @@ export async function testApp(sql: SQL, env: Record<string, string> = {}, servic
   await rotateKeys(sql, app.crypt);
   const secrets: Record<string, string> = {};
   for (const s of app.services.all()) {
-    for (const c of s.clients) if (c.type === "confidential") secrets[c.id] = await rotateClientSecret(sql, c.id);
+    for (const c of s.clients) if (c.type === "confidential") secrets[c.id] = await sql.begin((tx) => rotateClientSecret(tx, c.id));
   }
   return { app, router: buildRouter(), mails, alerts, logs, secrets };
 }
@@ -249,4 +249,13 @@ export async function outboxEvents(sql: SQL, service?: string): Promise<{ servic
 
 export async function flush(): Promise<void> {
   await Bun.sleep(5);
+}
+
+// Waits for work that runs after a response (a reset link is made then).
+export async function waitFor(check: () => boolean, ms = 2000): Promise<void> {
+  const until = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > until) throw new Error("timed out waiting");
+    await Bun.sleep(5);
+  }
 }

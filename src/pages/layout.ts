@@ -67,8 +67,17 @@ export function hiddenCsrf(token: string): string {
   return `<input type="hidden" name="csrf" value="${h(token)}">`;
 }
 
+// The request came from one of this issuer's own pages. Under the pages'
+// Referrer-Policy: no-referrer, a browser sends `Origin: null` on a
+// same-origin form post, and says so in Sec-Fetch-Site, which page scripts
+// can't set (§9.2). A missing Origin is refused.
+export function fromThisSite(app: App, req: Request): boolean {
+  const origin = req.headers.get("Origin");
+  return origin === app.config.issuer || (origin === "null" && req.headers.get("Sec-Fetch-Site") === "same-origin");
+}
+
 export function checkForm(app: App, req: Request, form: URLSearchParams): void {
-  if (req.headers.get("Origin") !== app.config.issuer) throw new HttpError(403, "forbidden", "This form was not sent from this site.");
+  if (!fromThisSite(app, req)) throw new HttpError(403, "forbidden", "This form was not sent from this site.");
   const cookie = hostCookie(req, FORM_COOKIE) ?? "";
   const sent = form.get("csrf") ?? "";
   if (!cookie || !safeEqual(cookie, sent)) throw new HttpError(403, "forbidden", "This form has expired. Go back, reload the page and try again.");

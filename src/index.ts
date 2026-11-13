@@ -78,6 +78,8 @@ async function stop(signal: string) {
   console.log(`${signal}: finishing requests in flight`);
   await server.stop();
   await jobs?.stop();
+  // Emails queued by the last requests go out, within the stop's grace period.
+  await Promise.race([app.drainMail(), Bun.sleep(5000)]);
   await sql.close({ timeout: 5 });
   process.exit(0);
 }

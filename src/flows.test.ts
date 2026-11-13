@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { fromBase32 } from "./crypto";
 import { hotp, stepAt } from "./totp";
-import { Browser, flush, makeUser, TEST_DATABASE_URL, testApp, testDb, type TestApp, type TestDb } from "./testing/harness";
+import { Browser, flush, makeUser, TEST_DATABASE_URL, testApp, testDb, waitFor, type TestApp, type TestDb } from "./testing/harness";
 
 // Sign-up, password reset and recovery (docs/DESIGN.md U5–U7, §9.1, §9.4).
 describe.skipIf(!TEST_DATABASE_URL)("account flows", () => {
@@ -69,6 +69,7 @@ describe.skipIf(!TEST_DATABASE_URL)("account flows", () => {
       expect(known.status).toBe(unknown.status);
       const strip = (s: string) => s.replace(/value="[\w-]{43}"/g, "");
       expect(strip(await known.text())).toBe(strip(await unknown.text()));
+      await waitFor(() => t.mails.length > 0);
       await flush();
       expect(t.mails.map((m) => m.to)).toEqual(["rita@example.com"]);
     });
@@ -85,7 +86,7 @@ describe.skipIf(!TEST_DATABASE_URL)("account flows", () => {
       await t.app.sql`DELETE FROM throttle WHERE key LIKE 'mail:%'`;
       t.mails.length = 0;
       await new Browser(t, "192.0.2.14").form("/reset", { action: "email", login: "rita@example.com" });
-      await flush();
+      await waitFor(() => link("reset/confirm") !== null);
       const token = link("reset/confirm")!;
       const b = new Browser(t, "192.0.2.14");
       expect((await b.request(`/reset/confirm?token=${token}`)).status).toBe(200);
@@ -100,7 +101,7 @@ describe.skipIf(!TEST_DATABASE_URL)("account flows", () => {
       t.mails.length = 0;
       await t.app.sql`DELETE FROM throttle WHERE key LIKE 'mail:%'`;
       await new Browser(t, "192.0.2.15").form("/reset", { action: "email", login: "rita" });
-      await flush();
+      await waitFor(() => link("reset/confirm") !== null);
       const token = link("reset/confirm")!;
       await t.app.sql`UPDATE one_time_tokens SET expires_at = now() - interval '1 second' WHERE purpose = 'reset'`;
       expect((await new Browser(t).form("/reset/confirm", { token, password: "a whole new password" })).status).toBe(404);
@@ -116,13 +117,49 @@ describe.skipIf(!TEST_DATABASE_URL)("account flows", () => {
       await t.app.sql`DELETE FROM throttle WHERE key LIKE 'mail:%'`;
       t.mails.length = 0;
       await new Browser(t, "192.0.2.21").form("/reset", { action: "email", login: "tom" });
-      await flush();
+      await waitFor(() => link("reset/confirm") !== null);
       const token = link("reset/confirm")!;
       const c = new Browser(t, "192.0.2.21");
       expect((await c.form("/reset/confirm", { token, password: "a whole new password" })).status).toBe(401);
       expect((await c.form("/reset/confirm", { token, password: "a whole new password", code: "123456" })).status).toBe(401);
       const ok = await c.form("/reset/confirm", { token, password: "a whole new password", code: hotp(secret, stepAt(Date.now() / 1000) + 1) });
       expect(ok.headers.get("Location")).toStartWith("/login?");
+    });
+
+    test("the per-address limit counts the address mail goes to, however it was typed", async () => {
+      await makeUser(t, { username: "vera", password: PW });
+      t.mails.length = 0;
+      const b = new Browser(t, "192.0.2.40");
+      for (let i = 0; i < 3; i++) await b.form("/reset", { action: "email", login: "vera" });
+      for (let i = 0; i < 3; i++) expect((await b.form("/reset", { action: "email", login: "VERA@example.com" })).status).toBe(200);
+      await Bun.sleep(100);
+      expect(t.mails.filter((m) => m.to === "vera@example.com")).toHaveLength(3);
+    });
+
+    test("second-factor failures at a reset link count against the account", async () => {
+      const id = await makeUser(t, { username: "wanda", password: PW });
+      const b = new Browser(t, "192.0.2.41");
+      await b.signIn("wanda", PW);
+      const start = await (await b.api("POST", "/v1/me/totp", {})).json() as any;
+      await b.api("POST", "/v1/me/totp", { enrollment: start.enrollment, code: hotp(fromBase32(start.secret)!, stepAt(Date.now() / 1000)) });
+      await t.app.sql`DELETE FROM throttle WHERE key LIKE 'mail:%'`;
+      t.mails.length = 0;
+      await new Browser(t, "192.0.2.42").form("/reset", { action: "email", login: "wanda" });
+      await waitFor(() => link("reset/confirm") !== null);
+      const token = link("reset/confirm")!;
+      for (let i = 0; i < 2; i++) await new Browser(t, "192.0.2.42").form("/reset/confirm", { token, password: "a whole new password", code: "000000" });
+      const [row] = await t.app.sql`SELECT hits FROM throttle WHERE key = ${`login:user:${id}`}`;
+      expect(row.hits).toBe(2);
+    });
+
+    test("a recovery-code reset proves the code before telling anything about the account", async () => {
+      await makeUser(t, { username: "quinn", password: PW, email: "quinn.long@example.com" });
+      const c = new Browser(t, "192.0.2.43");
+      // A password equal to the account's email would be refused, but only
+      // after the code is proved: a wrong code says nothing about the email.
+      const res = await c.form("/reset", { action: "recovery", login: "quinn", code: "aaaa-aaaa-aaaa-aaaa-aaaa-aaaa", password: "quinn.long@example.com" });
+      expect(res.status).toBe(401);
+      expect(await res.text()).toContain("don&#39;t match");
     });
 
     test("a recovery code resets without email, once, under the sign-in limits", async () => {
@@ -143,6 +180,60 @@ describe.skipIf(!TEST_DATABASE_URL)("account flows", () => {
       // Wrong codes count against the account.
       for (let i = 0; i < 4; i++) await c.form("/reset", { action: "recovery", login: "uma", code: "aaaa-aaaa-aaaa-aaaa-aaaa-aaaa", password: "another new password" });
       expect((await c.form("/reset", { action: "recovery", login: "uma", code: codes[1]!, password: "another new password" })).status).toBe(429);
+    });
+  });
+
+  describe("links bound to an address", () => {
+    let bossSecret: string | null = null;
+    test("an admin's email change voids the old activation link and sends a new one", async () => {
+      const admin = await makeUser(t, { username: "boss", password: PW, access: { auth: "admin" } });
+      const b = new Browser(t, "192.0.2.50");
+      await b.signIn("boss", PW);
+      const start = await (await b.api("POST", "/v1/me/totp", {})).json() as any;
+      bossSecret = start.secret;
+      await b.api("POST", "/v1/me/totp", { enrollment: start.enrollment, code: hotp(fromBase32(start.secret)!, stepAt(Date.now() / 1000)) });
+      t.mails.length = 0;
+      const user = await (await b.api("POST", "/v1/users", { username: "typo", email: "typo@exmaple.test" })).json() as any;
+      await flush();
+      const oldLink = link("activate")!;
+      t.mails.length = 0;
+      expect((await b.api("PATCH", `/v1/users/${user.id}`, { email: "typo@example.com" })).status).toBe(200);
+      await flush();
+      const newLink = link("activate")!;
+      expect(t.mails.find((m) => m.text.includes("activate"))?.to).toBe("typo@example.com");
+      expect((await new Browser(t).form("/activate", { token: oldLink, password: PW })).status).toBe(404);
+      expect((await new Browser(t).form("/activate", { token: newLink, password: PW })).status).toBe(303);
+      void admin;
+    });
+
+    test("an admin's email change voids a reset link sent to the old address", async () => {
+      const id = await makeUser(t, { username: "moved-by-admin", password: PW });
+      const token = await t.app.sql.begin(async (tx) => (await import("./tokens")).issueToken(tx, "reset", id, "moved-by-admin@example.com"));
+      const admin = new Browser(t, "192.0.2.52");
+      await admin.signIn("boss", PW, hotp(fromBase32(bossSecret!)!, stepAt(Date.now() / 1000) + 1));
+      expect((await admin.api("PATCH", `/v1/users/${id}`, { email: "moved@example.org" })).status).toBe(200);
+      expect((await new Browser(t).form("/reset/confirm", { token, password: "a whole new password" })).status).toBe(404);
+    });
+
+    test("an activation link can't set the password of an account that has one", async () => {
+      const id = await makeUser(t, { username: "settled", password: PW });
+      const token = await t.app.sql.begin(async (tx) => (await import("./tokens")).issueToken(tx, "activate", id, "settled@example.com"));
+      expect((await new Browser(t).form("/activate", { token, password: "a whole new password" })).status).toBe(404);
+      expect((await new Browser(t).signIn("settled", PW)).status).toBe(303);
+    });
+
+    test("only the newest pending address can be confirmed", async () => {
+      await makeUser(t, { username: "yan", password: PW });
+      const b = new Browser(t, "192.0.2.51");
+      await b.signIn("yan", PW);
+      t.mails.length = 0;
+      await b.api("PATCH", "/v1/me", { email: "yan@exmaple.test" });
+      await flush();
+      const mistyped = link("verify-email")!;
+      await b.api("PATCH", "/v1/me", { email: "yan@example.org" });
+      await flush();
+      expect((await new Browser(t).form("/verify-email", { token: mistyped })).status).toBe(404);
+      expect((await (await b.api("GET", "/v1/me")).json() as any).email).toBe("yan@example.com");
     });
   });
 });

@@ -83,12 +83,13 @@ async function userNamed(ctx: CliContext, username: string | undefined): Promise
   return user;
 }
 
-async function send(ctx: CliContext, msg: MailMessage): Promise<void> {
+async function send(ctx: CliContext, msg: MailMessage, username: string): Promise<void> {
   try {
     await ctx.mailer.send(msg);
     ctx.out(`emailed ${msg.to}`);
   } catch (e) {
-    ctx.out(`the email to ${msg.to} failed (${e instanceof Error && e.name === "SmtpError" ? e.message : "error"}); use --print-link`);
+    const why = e instanceof Error && e.name === "SmtpError" ? e.message : "error";
+    ctx.out(`the email to ${msg.to} failed (${why}); print a link instead with: bun cli.ts user reset-link ${username} --print-link`);
   }
 }
 
@@ -129,7 +130,7 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
       ctx.out(`created ${username} (${id})`);
       if (email && token) {
         if (args.flags.has("print-link")) ctx.out(`activation link (works once, 14 days): ${app.config.issuer}/activate?token=${token}`);
-        else await send(ctx, activationEmail(app.config.issuer, email, username, token));
+        else await send(ctx, activationEmail(app.config.issuer, email, username, token), username);
       }
       await alert(ctx, `created ${username}${grants.length ? ` with ${grants.map((g) => `${g.service.name}:${g.role}`).join(", ")}` : ""}`);
       return 0;
@@ -145,7 +146,7 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
         await audit(tx, { actor: ACTOR, action: "mfa.cleared", userId: user.id });
       });
       ctx.out(`cleared the second factors of ${user.username} and signed them out`);
-      if (user.email) await send(ctx, securityNotice(user.email, user.username, "two-factor authentication was cleared by an administrator"));
+      if (user.email) await send(ctx, securityNotice(user.email, user.username, "two-factor authentication was cleared by an administrator"), user.username);
       await alert(ctx, `cleared the MFA of ${user.username}`);
       return 0;
     }
@@ -168,7 +169,7 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
         return t;
       });
       if (args.flags.has("print-link")) ctx.out(`reset link (works once, 30 minutes): ${app.config.issuer}/reset/confirm?token=${token}`);
-      else await send(ctx, resetEmail(app.config.issuer, user.email!, token));
+      else await send(ctx, resetEmail(app.config.issuer, user.email!, token), user.username);
       await alert(ctx, `made a reset link for ${user.username}`);
       return 0;
     }
@@ -177,13 +178,19 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
       const client = target ? app.services.client(target) : undefined;
       if (!client || client.type !== "confidential") throw new UsageError("name a confidential client from the services file");
       if (command === "secret") {
-        const secret = await rotateClientSecret(app.sql, client.id);
-        await audit(app.sql, { actor: ACTOR, action: "client.secret", detail: { client: client.id } });
+        const secret = await transaction(app.sql, async (tx) => {
+          const s = await rotateClientSecret(tx, client.id);
+          await audit(tx, { actor: ACTOR, action: "client.secret", detail: { client: client.id } });
+          return s;
+        });
         ctx.out(secret);
         await alert(ctx, `made a new secret for the client ${client.id}`);
       } else {
-        const n = await retireOldClientSecrets(app.sql, client.id);
-        await audit(app.sql, { actor: ACTOR, action: "client.secret_retire", detail: { client: client.id, retired: n } });
+        const n = await transaction(app.sql, async (tx) => {
+          const retired = await retireOldClientSecrets(tx, client.id);
+          await audit(tx, { actor: ACTOR, action: "client.secret_retire", detail: { client: client.id, retired } });
+          return retired;
+        });
         ctx.out(`retired ${n} old secret(s) of ${client.id}`);
         await alert(ctx, `retired the old secrets of the client ${client.id}`);
       }

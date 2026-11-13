@@ -26,7 +26,7 @@ import {
   type Session,
 } from "./sessions";
 import { emailAllowed, issueToken } from "./tokens";
-import { recordFailure } from "./throttle";
+import { failureWait, hit, recordFailure, tooMany } from "./throttle";
 import { transaction, type After } from "./tx";
 import { accountKey } from "./pages/signin";
 import { checkEmail, checkName, checkUsername, deleteUser, findUser, insertUser, setDisabled, userJson, type UserRow } from "./users";
@@ -83,9 +83,17 @@ function actorOf(c: Caller): string {
 }
 
 // Changing a credential, or deleting the account, needs a full sign-in in
-// the last 15 minutes (§7.5).
-function requireRecent(session: Session): void {
+// the last 15 minutes (§7.5). When the account has a second factor, that
+// sign-in must have used it: otherwise the password alone could enroll a
+// factor of its own, mint protocol credentials, or remove the factor.
+async function requireRecent(app: App, session: Session): Promise<void> {
   if (session.authAge > REAUTH_SECONDS) throw new HttpError(403, "reauth_required", "Sign in again to make this change.");
+  if (!hasMfa(session)) {
+    const factors = await factorsOf(app.sql, session.userId);
+    if (factors.totp || factors.passkeys > 0) {
+      throw new HttpError(403, "reauth_required", "Sign in again with your second factor to make this change.");
+    }
+  }
 }
 
 function pageParams(url: URL): { after: string; limit: number } {
@@ -150,7 +158,7 @@ export async function patchMe({ req, ip, deps: app }: Ctx<App>): Promise<Respons
   const name = body.name !== undefined ? checkName(body.name) : null;
   const email = body.email !== undefined ? checkEmail(body.email) : null;
   if (email !== null) {
-    requireRecent(session);
+    await requireRecent(app, session);
     const limit = await emailAllowed(app.sql, email, `user:${session.userId}`);
     if (!limit.allowed) throw new HttpError(429, "rate_limited", "Too many emails to that address.", { "Retry-After": String(limit.retryAfter) });
   }
@@ -161,13 +169,15 @@ export async function patchMe({ req, ip, deps: app }: Ctx<App>): Promise<Respons
     }
     if (email !== null && email.toLowerCase() !== (session.email ?? "").toLowerCase()) {
       // The address changes only once the new one is confirmed; the old one
-      // is told now (§9.1).
+      // is told now (§9.1). Only the newest pending address can be
+      // confirmed. A token is made either way, so the answer is the same
+      // whether or not another account uses the address; that account's
+      // owner gets a notice instead of the link.
+      await tx`DELETE FROM one_time_tokens WHERE user_id = ${session.userId} AND purpose = 'verify_email'`;
+      const token = await issueToken(tx, "verify_email", session.userId, email);
       const [taken] = await tx`SELECT 1 FROM users WHERE lower(email) = lower(${email})`;
       if (taken) after(() => app.mail(addressInUseEmail(email)));
-      else {
-        const token = await issueToken(tx, "verify_email", session.userId, email);
-        after(() => app.mail(verifyEmail(app.config.issuer, email, token)));
-      }
+      else after(() => app.mail(verifyEmail(app.config.issuer, email, token)));
       notify(app, after, session, "your email address is changing", `A confirmation link went to the new address.`);
       await audit(tx, { actor: session.userId, action: "email.change", userId: session.userId, ip });
     }
@@ -178,7 +188,7 @@ export async function patchMe({ req, ip, deps: app }: Ctx<App>): Promise<Respons
 export async function deleteMe({ req, ip, deps: app }: Ctx<App>): Promise<Response> {
   const session = await signedIn(app, req);
   if (!app.config.allowAccountDeletion) throw new HttpError(403, "forbidden", "This deployment doesn't let people delete their own accounts.");
-  requireRecent(session);
+  await requireRecent(app, session);
   const user = await userOr404(app, session.userId);
   await transaction(app.sql, (tx) => deleteUser(tx, app, user, session.userId, ip));
   return noContent({ cookies: [clearSessionCookie()] });
@@ -186,10 +196,15 @@ export async function deleteMe({ req, ip, deps: app }: Ctx<App>): Promise<Respon
 
 export async function changePassword({ req, ip, deps: app }: Ctx<App>): Promise<Response> {
   const session = await signedIn(app, req);
-  requireRecent(session);
+  await requireRecent(app, session);
   const body = await readJson(req);
   const user = await userOr404(app, session.userId);
   if (typeof body.new !== "string") throw new HttpError(400, "invalid_request", "new is required.");
+  // Guessing the current password is held to the sign-in limits (§9.4).
+  const perIp = await hit(app.sql, `ip:${ip ?? "unknown"}:login`, 30, 15 * 60);
+  if (!perIp.allowed) throw new HttpError(429, "rate_limited", "Too many attempts from your network.", tooMany(perIp));
+  const wait = await failureWait(app.sql, accountKey(user.id));
+  if (!wait.allowed) throw new HttpError(429, "rate_limited", "Too many failed attempts.", tooMany(wait));
   if (user.password_hash !== null) {
     const check = await app.hasher.verify(typeof body.current === "string" ? body.current.slice(0, 1024) : "", user.password_hash);
     if (!check.ok) {
@@ -211,7 +226,7 @@ export async function changePassword({ req, ip, deps: app }: Ctx<App>): Promise<
 
 export async function postTotp({ req, ip, deps: app }: Ctx<App>): Promise<Response> {
   const session = await signedIn(app, req);
-  requireRecent(session);
+  await requireRecent(app, session);
   const body = await readJson(req);
   if (body.enrollment === undefined) return json(200, startTotpEnrolment(app, session.userId, session.username));
   const result = await transaction(app.sql, async (tx, after) => {
@@ -231,7 +246,7 @@ export async function postTotp({ req, ip, deps: app }: Ctx<App>): Promise<Respon
 
 export async function deleteTotp({ req, ip, deps: app }: Ctx<App>): Promise<Response> {
   const session = await signedIn(app, req);
-  requireRecent(session);
+  await requireRecent(app, session);
   await transaction(app.sql, async (tx, after) => {
     if (!(await removeTotp(tx, session.userId))) throw new HttpError(404, "not_found", "No authenticator app is set up.");
     await audit(tx, { actor: session.userId, action: "totp.remove", userId: session.userId, ip });
@@ -242,7 +257,7 @@ export async function deleteTotp({ req, ip, deps: app }: Ctx<App>): Promise<Resp
 
 export async function postRecoveryCodes({ req, ip, deps: app }: Ctx<App>): Promise<Response> {
   const session = await signedIn(app, req);
-  requireRecent(session);
+  await requireRecent(app, session);
   const codes = await transaction(app.sql, async (tx, after) => {
     const c = await newRecoveryCodes(tx, session.userId);
     await audit(tx, { actor: session.userId, action: "recovery.regenerate", userId: session.userId, ip });
@@ -259,7 +274,7 @@ export async function getPasskeys({ req, deps: app }: Ctx<App>): Promise<Respons
 
 export async function postPasskey({ req, ip, deps: app }: Ctx<App>): Promise<Response> {
   const session = await signedIn(app, req);
-  requireRecent(session);
+  await requireRecent(app, session);
   const body = await readJson(req);
   if (body.registration === undefined) {
     return json(200, await registrationOptions(app, { id: session.userId, username: session.username, name: session.name }));
@@ -279,7 +294,7 @@ export async function postPasskey({ req, ip, deps: app }: Ctx<App>): Promise<Res
 
 export async function deletePasskey({ req, params, ip, deps: app }: Ctx<App>): Promise<Response> {
   const session = await signedIn(app, req);
-  requireRecent(session);
+  await requireRecent(app, session);
   await transaction(app.sql, async (tx, after) => {
     const rows = await tx`DELETE FROM passkeys WHERE id = ${params.id!} AND user_id = ${session.userId} RETURNING name`;
     if (rows.length === 0) throw new HttpError(404, "not_found", "No such passkey.");
@@ -362,12 +377,12 @@ function credentialRoutes(kind: CredentialKind) {
   async function owner(app: App, req: Request, params: Record<string, string>, change: boolean) {
     if (params.user === undefined) {
       const session = await signedIn(app, req);
-      if (change) requireRecent(session);
+      if (change) await requireRecent(app, session);
       return { userId: session.userId, actor: session.userId, notifyTo: session as { email: string | null; username: string }, admin: null, bot: null };
     }
     const c = await caller(app, req, false);
     requireAdmin(c);
-    if (change) requireRecent(c.session);
+    if (change) await requireRecent(app, c.session);
     const bot = await userOr404(app, params.user);
     if (bot.kind !== "bot") throw new HttpError(409, "conflict", `People manage their own ${label}s; this endpoint is for bot users.`);
     const ownerRow = bot.owner_id ? await findUser(app.sql, bot.owner_id) : null;
@@ -530,6 +545,13 @@ export async function patchUser({ req, params, ip, deps: app }: Ctx<App>): Promi
       } catch (e) {
         if ((e as { errno?: string }).errno === "23505") throw new HttpError(409, "conflict", "Another account uses that email address.");
         throw e;
+      }
+      // Links sent to the old address stop working; an account not yet
+      // activated gets a new activation link at the new one.
+      await tx`DELETE FROM one_time_tokens WHERE user_id = ${user.id}`;
+      if (user.password_hash === null) {
+        const token = await issueToken(tx, "activate", user.id, email);
+        after(() => app.mail(activationEmail(app.config.issuer, email, user.username, token)));
       }
       notify(app, after, user, "your email address is changing", "An administrator changed it.");
       fields.push("email");

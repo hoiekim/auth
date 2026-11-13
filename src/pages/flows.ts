@@ -1,7 +1,7 @@
 import type { App } from "../app";
 import { audit } from "../audit";
 import { addressInUseEmail, resetEmail, securityNotice, verifyEmail } from "../emails";
-import { factorsOf, checkSecondFactor, useRecoveryCode } from "../factors";
+import { factorsOf, checkSecondFactor, recoveryCodeValid, useRecoveryCode } from "../factors";
 import { hostCookie, HttpError, readForm, redirect } from "../http";
 import { acceptInvite, findLiveInvite } from "../invites";
 import { isEmailAddress } from "../mail";
@@ -42,7 +42,7 @@ ${v.error ? `<p class="error" role="alert">${h(v.error)}</p>` : ""}
 <form method="post" action="/signup">
   ${hiddenCsrf(token)}
   <input type="hidden" name="return_to" value="${h(v.returnTo)}">
-  ${field("Username", "username", 'required pattern="[a-z][a-z0-9-]{1,30}[a-z0-9]" autocomplete="username" maxlength="32"', v.username)}
+  ${field("Username", "username", 'required pattern="[a-z][a-z0-9\\-]{1,30}[a-z0-9]" autocomplete="username" maxlength="32"', v.username)}
   <p class="hint">${h(USERNAME_HINT)}</p>
   ${field("Name", "name", 'autocomplete="name" maxlength="200"', v.name)}
   ${field("Email", "email", 'type="email" required autocomplete="email" maxlength="254"', v.email)}
@@ -87,13 +87,13 @@ export async function postSignup({ req, ip, deps: app }: Ctx<App>): Promise<Resp
     userId = await transaction(app.sql, async (tx, after) => {
       // The address is set only once verified, so a sign-up can't take or
       // reveal an address another account uses (§9.4).
+      // A token is made either way, so nothing the new account can read
+      // differs; the address's owner gets a notice instead of the link.
       const id = await insertUser(tx, { username: v.username, name: v.name, email: null, emailVerified: false, kind: "person", ownerId: null, passwordHash: hash });
+      const token = await issueToken(tx, "verify_email", id, v.email);
       const [taken] = await tx`SELECT 1 FROM users WHERE lower(email) = lower(${v.email})`;
       if (taken) after(() => app.mail(addressInUseEmail(v.email)));
-      else {
-        const token = await issueToken(tx, "verify_email", id, v.email);
-        after(() => app.mail(verifyEmail(app.config.issuer, v.email, token)));
-      }
+      else after(() => app.mail(verifyEmail(app.config.issuer, v.email, token)));
       await audit(tx, { actor: id, action: "user.signup", userId: id, ip });
       return id;
     });
@@ -128,7 +128,7 @@ export async function getInvite({ req, url, deps: app }: Ctx<App>): Promise<Resp
   <input type="hidden" name="token" value="${h(token)}">
   <input type="hidden" name="action" value="create">
   <p>Email: ${h(invite.email)}</p>
-  ${field("Username", "username", 'required pattern="[a-z][a-z0-9-]{1,30}[a-z0-9]" autocomplete="username" maxlength="32"')}
+  ${field("Username", "username", 'required pattern="[a-z][a-z0-9\\-]{1,30}[a-z0-9]" autocomplete="username" maxlength="32"')}
   <p class="hint">${h(USERNAME_HINT)}</p>
   ${field("Name", "name", 'autocomplete="name" maxlength="200"')}
   ${field("Password", "password", PASSWORD_ATTRS)}
@@ -223,10 +223,13 @@ export async function postActivate({ req, ip, deps: app }: Ctx<App>): Promise<Re
   const ok = await app.sql.begin(async (tx) => {
     const used = await consumeToken(tx, "activate", token);
     if (!used) return false;
-    await tx`
-      UPDATE users SET password_hash = ${hash}, updated_at = now(),
-        email_verified_at = CASE WHEN email IS NOT NULL AND lower(email) = lower(${used.email ?? ""}) THEN now() ELSE email_verified_at END
-      WHERE id = ${used.user_id}`;
+    // Only for the address it was sent to, and only before the account has a
+    // password: after that, a reset (with its second factor) is the way in.
+    const set = await tx`
+      UPDATE users SET password_hash = ${hash}, email_verified_at = now(), updated_at = now()
+      WHERE id = ${used.user_id} AND password_hash IS NULL AND email IS NOT NULL AND lower(email) = lower(${used.email ?? ""})
+      RETURNING 1`;
+    if (set.length === 0) return false;
     await audit(tx, { actor: used.user_id, action: "user.activate", userId: used.user_id, ip });
     return true;
   });
@@ -265,7 +268,7 @@ export async function getReset({ req, deps: app }: Ctx<App>): Promise<Response> 
 }
 
 // The same answer, in the same time, whether or not the account exists: the
-// email goes out after the response, if at all.
+// lookup, the token and the email all happen after the response.
 export async function postReset({ req, ip, deps: app }: Ctx<App>): Promise<Response> {
   const form = await readForm(req);
   checkForm(app, req, form);
@@ -280,15 +283,24 @@ export async function postReset({ req, ip, deps: app }: Ctx<App>): Promise<Respo
     res.headers.set("Retry-After", String(limit.retryAfter));
     return res;
   }
-  const user = await findUserByLogin(app.sql, login);
-  if (user && user.kind === "person" && !user.disabled_at && user.email) {
-    await transaction(app.sql, async (tx, after) => {
-      const token = await issueToken(tx, "reset", user.id, user.email);
-      await audit(tx, { actor: null, action: "reset.requested", userId: user.id, ip });
-      after(() => app.mail(resetEmail(app.config.issuer, user.email!, token)));
-    });
-  }
+  void sendResetLink(app, login, ip).catch((e: unknown) => app.log(`reset link failed: ${e instanceof Error ? e.name : typeof e}`));
   return resetRequestPage(app, req, sent);
+}
+
+// The address mail goes to gets at most three an hour, however it was typed
+// (a username, or the address itself). Past that the mail is quietly not
+// sent: a counter of its own, so no answer depends on whether, or to which
+// address, an account exists.
+export async function sendResetLink(app: App, login: string, ip: string | null): Promise<void> {
+  const user = await findUserByLogin(app.sql, login);
+  if (!user || user.kind !== "person" || user.disabled_at || !user.email) return;
+  const perAddress = await hit(app.sql, `mail:sent:${user.email.toLowerCase()}`, 3, 3600);
+  if (!perAddress.allowed) return;
+  await transaction(app.sql, async (tx, after) => {
+    const token = await issueToken(tx, "reset", user.id, user.email);
+    await audit(tx, { actor: null, action: "reset.requested", userId: user.id, ip });
+    after(() => app.mail(resetEmail(app.config.issuer, user.email!, token)));
+  });
 }
 
 // U6 without email: a recovery code stands in for the link. It is held to
@@ -307,16 +319,18 @@ async function resetWithRecoveryCode(app: App, req: Request, ip: string | null, 
   const wait = await failureWait(app.sql, key);
   if (!wait.allowed) return fail("Too many failed attempts. Try again later.", 429, tooMany(wait));
   const password = form.get("password") ?? "";
-  // Checked before the code is spent, so a refused password doesn't cost one.
-  const problem = await newPasswordProblem(app, password, { username: login, email: user?.email });
-  if (problem) return fail(problem);
+  const code = (form.get("code") ?? "").slice(0, 40);
   const live = user && user.kind === "person" && !user.disabled_at ? user : null;
-  const used = await useRecoveryCode(app.sql, live?.id ?? null, (form.get("code") ?? "").slice(0, 40));
-  if (!used || !live) {
+  // The code is proved before anything about the account is told (the
+  // password rules read its email), and spent only once everything passes.
+  if (!(await recoveryCodeValid(app.sql, live?.id ?? null, code)) || !live) {
     await recordFailure(app.sql, key);
     await audit(app.sql, { actor: null, action: "reset.fail", userId: user?.id ?? null, ip, detail: { method: "recovery_code" } });
     return fail("That username and recovery code don't match.", 401);
   }
+  const problem = await newPasswordProblem(app, password, { username: live.username, email: live.email });
+  if (problem) return fail(problem);
+  if (!(await useRecoveryCode(app.sql, live.id, code))) return fail("That username and recovery code don't match.", 401);
   await finishReset(app, live.id, live.username, live.email, await app.hasher.hash(password), ip, "recovery_code");
   return redirect(`/login?${new URLSearchParams({ login_hint: live.username, notice: "reset" })}`);
 }
@@ -383,8 +397,11 @@ export async function postResetConfirm({ req, ip, deps: app }: Ctx<App>): Promis
   const factors = await factorsOf(app.sql, user.id);
   let method = "email";
   if (factors.totp || factors.passkeys > 0) {
+    // Like every second-factor failure, these count against the account's
+    // sign-in limit too (§9.4).
     const attempts = await hit(app.sql, `reset:${user.id}:second-factor`, 5, 30 * 60);
-    if (!attempts.allowed) return messagePage(app, 429, "Too many attempts", "Too many wrong codes. Try again later.", back);
+    const wait = await failureWait(app.sql, accountKey(user.id));
+    if (!attempts.allowed || !wait.allowed) return messagePage(app, 429, "Too many attempts", "Too many wrong codes. Try again later.", back);
     const code = (form.get("code") ?? "").trim().slice(0, 40);
     let ok = false;
     if (factors.totp) {
@@ -404,6 +421,7 @@ export async function postResetConfirm({ req, ip, deps: app }: Ctx<App>): Promis
       ok = (await finishAuthentication(app, hostCookie(req, "webauthn"), response)) === user.id;
     }
     if (!ok) {
+      await recordFailure(app.sql, accountKey(user.id));
       await audit(app.sql, { actor: null, action: "reset.fail", userId: user.id, ip, detail: { method: "second_factor" } });
       return messagePage(app, 401, "Second factor didn't work", "That code or passkey didn't work.", back);
     }
@@ -443,6 +461,8 @@ export async function postVerifyEmail({ req, ip, deps: app }: Ctx<App>): Promise
       const used = await consumeToken(tx, "verify_email", token);
       if (!used || !used.email) return false;
       await tx`UPDATE users SET email = ${used.email}, email_verified_at = now(), updated_at = now() WHERE id = ${used.user_id}`;
+      // Links sent to any other address stop working.
+      await tx`DELETE FROM one_time_tokens WHERE user_id = ${used.user_id} AND purpose IN ('verify_email', 'reset') AND used_at IS NULL`;
       await audit(tx, { actor: used.user_id, action: "email.verify", userId: used.user_id, ip });
       return true;
     });

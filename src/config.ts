@@ -172,7 +172,8 @@ function parseIssuer(raw: string, problems: string[]): string {
     !url.hash &&
     !raw.endsWith("/");
   if (!ok || !url) {
-    problems.push(`ISSUER_URL must be an https origin with no path or trailing slash (http only for a loopback host), not "${raw}"`);
+    // Not echoed: a mistake here can be another variable's value, credentials included.
+    problems.push("ISSUER_URL must be an https origin with no path or trailing slash (http only for a loopback host)");
     return "";
   }
   return url.origin;

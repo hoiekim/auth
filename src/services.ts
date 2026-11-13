@@ -265,7 +265,9 @@ function uriList(value: unknown, isPublic: boolean, field: string, p: (msg: stri
       (url.protocol === "https:" ||
         (url.protocol === "http:" && isLoopbackHost(url.hostname)) ||
         (isPublic && PRIVATE_SCHEME.test(url.protocol)));
-    if (!ok) p(`${field} has ${JSON.stringify(v)}, which is not an https URI, an http URI on a loopback host, or (for a public client) a private-use scheme`);
+    // A URI with credentials in it is named without them.
+    const shown = url && (url.username || url.password) ? "a URI with credentials" : JSON.stringify(v);
+    if (!ok) p(`${field} has ${shown}, which is not an https URI, an http URI on a loopback host, or (for a public client) a private-use scheme`);
     else out.push(v as string);
   }
   return out;

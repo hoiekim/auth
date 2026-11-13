@@ -143,8 +143,10 @@ function isHostName(host: string): boolean {
   return host.length <= 253 && host.split(".").every((label) => DNS_LABEL.test(label));
 }
 
+// An address literal in 127/8, not just text that looks like one: anything
+// else would be resolved through DNS and could lead off the host.
 function isLoopback(host: string): boolean {
-  return host === "localhost" || host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host);
+  return host === "localhost" || host === "::1" || (net.isIP(host) === 4 && host.startsWith("127."));
 }
 
 function buildMessage(sender: { address: string; header: string }, msg: MailMessage): string {
@@ -270,6 +272,7 @@ function connectionError(e: unknown): SmtpError {
 
 const ignore = () => {};
 const MAX_REPLY_BYTES = 64 * 1024;
+const MAX_QUEUED_REPLIES = 8;
 
 // One SMTP connection, read one reply at a time. The first failure (a socket
 // error, the server closing, the timeout) rejects whatever is waiting and
@@ -278,6 +281,7 @@ class Session {
   private socket: net.Socket;
   private pending = "";
   private lines: string[] = [];
+  private linesBytes = 0;
   private replies: Reply[] = [];
   private resolveReply: ((reply: Reply) => void) | undefined;
   private rejectWaiter: ((e: Error) => void) | undefined;
@@ -356,16 +360,23 @@ class Session {
       this.pending = this.pending.slice(end + 1);
       const match = /^(\d{3})(?:([ -])(.*))?$/.exec(line);
       if (!match) return this.abort(new SmtpError("smtp: the server's reply is malformed"));
+      // The whole reply is capped, continuation lines included, and so are
+      // replies nobody asked for: a server can't make the process buffer
+      // without bound.
+      this.linesBytes += line.length;
+      if (this.linesBytes > MAX_REPLY_BYTES) return this.abort(new SmtpError("smtp: the server's reply is too long"));
       this.lines.push(match[3] ?? "");
       if (match[2] === "-") continue;
       const reply = { code: Number(match[1]), lines: this.lines };
       this.lines = [];
+      this.linesBytes = 0;
       const resolve = this.resolveReply;
       if (resolve) {
         this.resolveReply = undefined;
         this.rejectWaiter = undefined;
         resolve(reply);
       } else {
+        if (this.replies.length >= MAX_QUEUED_REPLIES) return this.abort(new SmtpError("smtp: the server sent replies nobody asked for"));
         this.replies.push(reply);
       }
     }

@@ -128,6 +128,52 @@ describe.skipIf(!TEST_DATABASE_URL)("sign-in", () => {
     expect(d.cookies.has("__Host-pending")).toBe(false);
   });
 
+  test("five tries per password sign-in, even with the account's counter clear", async () => {
+    const id = await makeUser(t, { username: "carol2", password: PW });
+    const b = new Browser(t, "192.0.2.63");
+    await b.signIn("carol2", PW);
+    const secret = await enrolTotp(b);
+    const d = new Browser(t, "192.0.2.64");
+    await d.form("/login", { login: "carol2", password: PW });
+    for (let i = 0; i < 5; i++) {
+      await d.form("/login/second-factor", { code: "000000" });
+      await t.app.sql`DELETE FROM throttle WHERE key = ${`login:user:${id}`}`;
+    }
+    expect((await d.form("/login/second-factor", { code: hotp(secret, stepAt(Date.now() / 1000) + 1) })).status).toBe(429);
+  });
+
+  test("starting over doesn't buy more second-factor guesses: they count against the account", async () => {
+    await makeUser(t, { username: "carol3", password: PW });
+    const b = new Browser(t, "192.0.2.65");
+    await b.signIn("carol3", PW);
+    const secret = await enrolTotp(b);
+    for (let round = 0; round < 2; round++) {
+      const d = new Browser(t, "192.0.2.66");
+      await d.form("/login", { login: "carol3", password: PW });
+      for (let i = 0; i < (round === 0 ? 4 : 1); i++) await d.form("/login/second-factor", { code: "000000" });
+    }
+    // Five failures across two sign-ins: the next code waits, however right.
+    const e = new Browser(t, "192.0.2.67");
+    const again = await e.form("/login", { login: "carol3", password: PW });
+    expect(again.status).toBe(429);
+    void secret;
+  });
+
+  test("a same-origin form post a browser marks Origin: null is accepted; null alone is not", async () => {
+    const b = new Browser(t, "192.0.2.68");
+    const csrf = await b.formCsrf();
+    const post = (headers: Record<string, string>) =>
+      b.request("/login", {
+        method: "POST",
+        origin: "null",
+        headers: { "Content-Type": "application/x-www-form-urlencoded", ...headers },
+        body: new URLSearchParams({ login: "alice", password: PW, csrf }).toString(),
+      });
+    expect((await post({ "Sec-Fetch-Site": "same-origin" })).status).toBe(303);
+    expect((await post({ "Sec-Fetch-Site": "cross-site" })).status).toBe(403);
+    expect((await post({})).status).toBe(403);
+  });
+
   test("a recovery code stands in for TOTP once, and is audited and emailed", async () => {
     await makeUser(t, { username: "dan", password: PW });
     const b = new Browser(t, "192.0.2.70");

@@ -19,6 +19,8 @@ export interface App extends ServerDeps {
   // Queues an email; sending happens after the caller's response, so an
   // answer never waits on, or reveals, whether a message went out.
   mail: (msg: MailMessage) => void;
+  // Settles once every queued email has been sent or has failed.
+  drainMail: () => Promise<void>;
   // Posts to the deployment's alert webhook, when it has one.
   alert: (text: string) => void;
   hasher: Hasher;
@@ -36,13 +38,15 @@ export function createApp(config: Config, sql: SQL, mailer: Mailer, overrides: A
   const log = overrides.log ?? ((line: string) => console.log(line));
   const fetchFn = overrides.fetch ?? fetch;
   const crypt = new Encrypter(config.encryptionKey);
+  const queue = mailQueue(mailer, log);
   return {
     config,
     services: config.services,
     sql,
     crypt,
     keys: new KeyStore(sql, crypt),
-    mail: mailQueue(mailer, log),
+    mail: queue.send,
+    drainMail: queue.drain,
     alert: webhookAlert(config.alertWebhookUrl, fetchFn, log),
     hasher: new Hasher(),
     breached: overrides.breached ?? ((pw) => isBreached(pw, fetchFn)),
@@ -53,19 +57,24 @@ export function createApp(config: Config, sql: SQL, mailer: Mailer, overrides: A
 
 const MAX_QUEUED_EMAILS = 200;
 
-export function mailQueue(mailer: Mailer, log: (line: string) => void): (msg: MailMessage) => void {
+export function mailQueue(mailer: Mailer, log: (line: string) => void): { send: (msg: MailMessage) => void; drain: () => Promise<void> } {
   const slots = new Semaphore(2);
-  let queued = 0;
-  return (msg) => {
-    if (queued >= MAX_QUEUED_EMAILS) {
-      log("email dropped: the send queue is full");
-      return;
-    }
-    queued++;
-    slots
-      .run(() => mailer.send(msg))
-      .catch((e: unknown) => log(`email failed: ${describeMailError(e)}`))
-      .finally(() => queued--);
+  const inFlight = new Set<Promise<void>>();
+  return {
+    send(msg) {
+      if (inFlight.size >= MAX_QUEUED_EMAILS) {
+        log("email dropped: the send queue is full");
+        return;
+      }
+      const sending: Promise<void> = slots
+        .run(() => mailer.send(msg))
+        .catch((e: unknown) => log(`email failed: ${describeMailError(e)}`))
+        .finally(() => inFlight.delete(sending));
+      inFlight.add(sending);
+    },
+    async drain() {
+      await Promise.allSettled([...inFlight]);
+    },
   };
 }
 

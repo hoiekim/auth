@@ -58,23 +58,23 @@ export async function authenticateClient(app: App, req: Request, form: URLSearch
 
 // A new secret for a client, printed once by the CLI (§9.3). Two stay live
 // so the app can be moved to the new one: this one and the newest before it.
-export async function rotateClientSecret(sql: SQL, clientId: string): Promise<string> {
+// Runs in the caller's transaction, with the change's audit row.
+export async function rotateClientSecret(tx: SQL, clientId: string): Promise<string> {
   const secret = randomToken();
-  await sql.begin(async (tx) => {
-    await tx`
-      UPDATE client_secrets SET revoked_at = now()
-      WHERE client_id = ${clientId} AND revoked_at IS NULL
-        AND secret_hash <> ALL (SELECT secret_hash FROM client_secrets
-                                WHERE client_id = ${clientId} AND revoked_at IS NULL
-                                ORDER BY created_at DESC LIMIT 1)`;
-    await tx`INSERT INTO client_secrets (client_id, secret_hash) VALUES (${clientId}, ${sha256(secret)})`;
-  });
+  await tx`
+    UPDATE client_secrets SET revoked_at = now()
+    WHERE client_id = ${clientId} AND revoked_at IS NULL
+      AND secret_hash <> ALL (SELECT secret_hash FROM client_secrets
+                              WHERE client_id = ${clientId} AND revoked_at IS NULL
+                              ORDER BY created_at DESC LIMIT 1)`;
+  await tx`INSERT INTO client_secrets (client_id, secret_hash) VALUES (${clientId}, ${sha256(secret)})`;
   return secret;
 }
 
-// Ends a rotation: every secret but the newest stops working.
-export async function retireOldClientSecrets(sql: SQL, clientId: string): Promise<number> {
-  const rows = await sql`
+// Ends a rotation: every secret but the newest stops working. Runs in the
+// caller's transaction.
+export async function retireOldClientSecrets(tx: SQL, clientId: string): Promise<number> {
+  const rows = await tx`
     UPDATE client_secrets SET revoked_at = now()
     WHERE client_id = ${clientId} AND revoked_at IS NULL
       AND secret_hash <> ALL (SELECT secret_hash FROM client_secrets

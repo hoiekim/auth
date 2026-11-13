@@ -95,6 +95,13 @@ describe("loadConfig", () => {
     },
   );
 
+  test("a refused ISSUER_URL is never echoed: it can be another variable's value", () => {
+    for (const value of ["postgres://auth:s3cret-pw@db.internal:5432/auth", "https://admin:s3cret-pw@auth.example.com"]) {
+      const found = problems({ ...ENV, ISSUER_URL: value });
+      expect(found).toEqual(["ISSUER_URL must be an https origin with no path or trailing slash (http only for a loopback host)"]);
+    }
+  });
+
   test("allows an http issuer on a loopback host only", () => {
     expect(load({ ISSUER_URL: "http://localhost:3000" }).issuer).toBe("http://localhost:3000");
   });
@@ -210,6 +217,13 @@ describe("the services file (§6)", () => {
     ["an unknown type", { type: "spa" }],
   ])("refuses a client with %s", (_, over) => {
     expect(check(svc({ clients: [{ id: "wiki", type: "confidential", redirect_uris: ["https://wiki.example.com/cb"], ...over }] }))).toHaveLength(1);
+  });
+
+  test("a refused redirect URI with credentials in it is named without them", () => {
+    const found = check(svc({ clients: [{ id: "wiki", type: "confidential", redirect_uris: ["https://u:s3cret-pw@wiki.example.com/cb"] }] }));
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain("a URI with credentials");
+    expect(found[0]).not.toContain("s3cret-pw");
   });
 
   test("accepts loopback http and a public client's private-use scheme", () => {
