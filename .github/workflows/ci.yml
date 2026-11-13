@@ -71,11 +71,28 @@ jobs:
           docker network create ci
           docker run -d --name db --network ci \
             -e POSTGRES_USER=auth -e POSTGRES_PASSWORD=auth -e POSTGRES_DB=auth postgres:16-alpine
+          # A services file with one of each kind of client, mounted the way
+          # a deployment would.
+          cat > "$RUNNER_TEMP/services.json" <<'JSON'
+          {"services": [
+            {"name": "wiki", "roles": ["member", "admin"], "mfa_roles": ["admin"], "signup": "invite",
+             "clients": [{"id": "wiki", "type": "confidential", "redirect_uris": ["https://wiki.example.com/auth/callback"]}]},
+            {"name": "tasks", "roles": ["user"], "mfa_roles": [], "signup": "open", "default_role": "user",
+             "clients": [{"id": "tasks-ios", "type": "public", "redirect_uris": ["com.example.tasks:/auth/callback"]}]}
+          ]}
+          JSON
           # Docker runs the image's own HEALTHCHECK; only its interval is
           # shortened, so the status turns within seconds. It keeps failing
-          # while Postgres finishes starting.
+          # while Postgres finishes starting and the migrations run.
           docker run -d --name auth --network ci --health-interval 1s \
-            -e DATABASE_URL=postgres://auth:auth@db:5432/auth auth:ci
+            -v "$RUNNER_TEMP/services.json:/etc/auth/services.json:ro" \
+            -e DATABASE_URL=postgres://auth:auth@db:5432/auth \
+            -e ISSUER_URL=https://auth.example.com \
+            -e SERVICES_FILE=/etc/auth/services.json \
+            -e AUTH_ENCRYPTION_KEY="$(openssl rand -base64 32)" \
+            -e SMTP_URL=smtp://localhost:2525 \
+            -e EMAIL_FROM=auth@example.com \
+            auth:ci
           for i in $(seq 1 60); do
             status=$(docker inspect auth --format '{{.State.Health.Status}}')
             [ "$status" = healthy ] && break
@@ -86,6 +103,14 @@ jobs:
             echo "::error::the image's HEALTHCHECK never passed (status: $status)"
             exit 1
           fi
+
+      # The break-glass CLI runs inside the container, against the same
+      # database, and the OIDC discovery document is served.
+      - name: Use the CLI and discovery
+        run: |
+          docker exec auth bun cli.ts user create --username ci-admin --email ci-admin@example.com --access auth:admin --print-link \
+            | grep -q '^activation link'
+          docker exec auth bun -e "const r = await fetch('http://localhost:3000/.well-known/openid-configuration'); const d = await r.json(); process.exit(r.ok && d.issuer === 'https://auth.example.com' ? 0 : 1)"
 
       # docker stop sends SIGTERM, then SIGKILL after 10 seconds. A clean stop
       # exits 0 well before that; an unhandled SIGTERM shows as 137 at 10 s.

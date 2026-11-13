@@ -10,14 +10,15 @@ WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 
-COPY tsconfig.json ./
+COPY tsconfig.json cli.ts ./
 COPY src src
+COPY client client
 
 # The database tests skip here (no TEST_DATABASE_URL); CI runs them, and CD
 # publishes only commits whose CI passed.
 RUN bun run typecheck
 RUN bun test
-RUN find src -name '*.test.ts' -delete
+RUN find src -name '*.test.ts' -delete && rm -r src/testing
 
 FROM oven/bun:1.4.4-slim
 
@@ -27,6 +28,8 @@ WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 COPY --from=builder /app/src src
+# The break-glass CLI (docs/DESIGN.md §9.6): `bun cli.ts help` in a running container.
+COPY --from=builder /app/cli.ts cli.ts
 
 USER bun
 

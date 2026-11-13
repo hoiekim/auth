@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { handle, type Route, type ServerDeps } from "./server";
+import { handle, healthRoutes, Router, type ServerDeps } from "./server";
 
 function deps(overrides: Partial<ServerDeps> = {}) {
   const lines: string[] = [];
@@ -81,23 +81,47 @@ describe("every response", () => {
 
   test("a handler that throws is a 500, logged by its error's name only", async () => {
     const { deps: d, lines } = deps();
-    const table = new Map<string, Route>([
-      [
-        "/boom",
-        {
-          name: "boom",
-          methods: ["GET"],
-          handle: async () => {
-            throw new TypeError("token=abc123");
-          },
-        },
-      ],
-    ]);
-    const res = await handle(get("/boom?code=abc123"), d, table);
+    const router = new Router<ServerDeps>().add("/boom", "boom", {
+      GET: async () => {
+        throw new TypeError("token=abc123");
+      },
+    });
+    const res = await handle(get("/boom?code=abc123"), d, router);
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: "server_error", error_description: "Internal error." });
     expect(lines).toHaveLength(2);
     expect(lines[0]).toBe("GET boom threw TypeError");
     expect(lines[1]).toMatch(/^GET boom 500 \d+ms$/);
+  });
+});
+
+describe("Router", () => {
+  const ok = (body: string) => async () => new Response(body);
+  const router = new Router<ServerDeps>()
+    .add("/v1/users", "users", { GET: ok("list") })
+    .add("/v1/users/:id", "user", { GET: ok("one"), DELETE: ok("gone") })
+    .add("/v1/users/:id/access/:service", "access", { PUT: ok("put") });
+
+  test("matches exact paths before patterns, and fills parameters", () => {
+    expect(router.match("/v1/users")?.route.name).toBe("users");
+    expect(router.match("/v1/users/usr_1")).toMatchObject({ route: { name: "user" }, params: { id: "usr_1" } });
+    expect(router.match("/v1/users/usr_1/access/wiki")).toMatchObject({ route: { name: "access" }, params: { id: "usr_1", service: "wiki" } });
+  });
+
+  test.each(["/v1/users/", "/v1/users/a/b", "/v1/users/%2e%2e", "/v1/users/a%2Fb/access/wiki", "/v1/users/a b"])("refuses %p", (path) => {
+    expect(router.match(path)).toBeNull();
+  });
+
+  test("a known path with another method is a 405 listing the methods", async () => {
+    const { deps: d } = deps();
+    const res = await handle(get("/v1/users/usr_1", "PATCH"), d, router);
+    expect(res.status).toBe(405);
+    expect(res.headers.get("Allow")).toBe("GET, DELETE");
+  });
+
+  test("the health route can be mounted on any router", async () => {
+    const { deps: d } = deps();
+    const res = await handle(get("/healthz"), d, healthRoutes(new Router<ServerDeps>()));
+    expect(res.status).toBe(200);
   });
 });
