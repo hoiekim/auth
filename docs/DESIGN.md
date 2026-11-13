@@ -1,6 +1,6 @@
 # Auth service: design
 
-Status: proposal. Scope: an identity and access service that anyone can deploy in front of the apps they run. It covers who can sign in, how, and with what access to each app.
+Status: built through phase 3 (§13); phase 4 is designed, not built. Scope: an identity and access service that anyone can deploy in front of the apps they run. It covers who can sign in, how, and with what access to each app.
 
 ## 1. Summary
 
@@ -236,7 +236,7 @@ The fields of a service:
 | `default_role` | with `signup: "open"` | The role an open sign-up receives; one of `roles`. |
 | `manages_own_members` | no (`false`) | The service's own client may call the ★ endpoints of §7.5 for this service. |
 | `api_key_scopes`, `app_password_scopes` | no (none) | The scopes API keys and app passwords for this service may carry. A service with neither gets neither kind of credential. |
-| `clients` | yes | One or more, each with an `id` unique across every service, a `type` (`confidential` or `public`), `redirect_uris` and optional `post_logout_redirect_uris`. Redirect URIs are absolute: `https`, `http` only for `localhost`, or a private-use scheme for a public client (RFC 8252). |
+| `clients` | yes | One or more, each with an `id` unique across every service, a `type` (`confidential` or `public`), `redirect_uris` and optional `post_logout_redirect_uris`. Redirect URIs are absolute: `https`, `http` only for a loopback host (`localhost`, `127.0.0.1` or `[::1]`, RFC 8252 §7.3), or a private-use scheme for a public client (RFC 8252). |
 | `events_url` | no | Where §7.4's events go. A service without one relies on the pull (§7.1), and on reading its pending invites (§12.6). |
 
 The file is checked at start, like every other setting: a file that breaks any rule above stops the start, and every problem is listed at once.
@@ -308,7 +308,7 @@ sequenceDiagram
 | `GET /oauth/authorize` | `response_type=code` only. Required: `client_id`, `redirect_uri` (exact string match against the registered list), `state`, `code_challenge` with `S256`, and `nonce` when `scope` has `openid`. Optional: `prompt=none\|login`, `max_age`, `login_hint`. |
 | `POST /oauth/token` | Grants: `authorization_code` and `refresh_token`. Confidential clients use `client_secret_basic`. Public clients use `none` and PKCE. |
 | `POST /oauth/revoke` | RFC 7009. Accepts refresh tokens. |
-| `POST /oauth/introspect` | RFC 7662, client-authenticated. Checks an **API key or app password**, never a JWT (apps verify those locally). Answers `active: true` only when the credential's service is the caller's, the credential is unexpired and unrevoked, and its owner is enabled and holds a role on that service. Removing someone from a service stops their keys and app passwords for it too. An active answer carries `sub`, `username`, `scope`, and the owner's current `role` on that service. |
+| `POST /oauth/introspect` | RFC 7662, client-authenticated. Checks an **API key or app password**, never a JWT (apps verify those locally). Answers `active: true` only when the credential's service is the caller's, the credential is unexpired and unrevoked, and its owner is enabled and holds a role on that service. Removing someone from a service stops their keys and app passwords for it too. An active answer carries `sub`, `username`, `scope`, the owner's current `role` on that service, and `jti`, the credential's id, so a client can drop its cached answer on `credential.revoked`. |
 | `GET /oauth/userinfo` | OIDC userinfo, for clients that expect it. The client in §7.6 doesn't use it. |
 | `GET /logout` | RP-initiated logout. `post_logout_redirect_uri` must be registered for the `client_id`. |
 
@@ -321,13 +321,13 @@ Not implemented, on purpose: implicit and hybrid flows, the password grant, `cli
 | Access token | JWT, `{"alg":"EdDSA","typ":"at+jwt","kid":"…"}` | 10 min | not stored |
 | ID token | JWT, EdDSA | 10 min; used once, at sign-in | not stored |
 | Refresh token, confidential client | `rt_` + 32 random bytes (base64url) | Bound to the SSO session. Not rotated: a confidential client authenticates every use (OAuth 2.1 §4.3.1). | SHA-256 |
-| Refresh token, public client | the same | 30 days idle. **Rotated on every use**; reusing one more than 30 s later revokes its whole family. | SHA-256 |
+| Refresh token, public client | the same | 30 days idle. **Rotated on every use**; reusing one more than 30 s later revokes its whole family. The family outlives the SSO session it started from; its id (`ses_…`) is the `sid` of the tokens it issues, and it is listed and ended with the user's devices. | SHA-256 |
 | Authorization code | 32 random bytes | 60 s, single use | SHA-256 |
 | SSO session cookie | `__Host-auth` = 32 random bytes | 7 days idle, 30 days absolute | SHA-256 |
 | App password | `xxxx-xxxx-xxxx-xxxx`: 16 lowercase base32 characters, 80 bits, easy to type into a phone | until revoked | SHA-256, unique. The password alone identifies its owner. |
 | Recovery code | 24 base32 characters in six groups of four (120 bits) | until used | SHA-256, per account |
 | API key | `<prefix>_<key id>_<32 random bytes base64url>`. The prefix is the deployment's (`API_KEY_PREFIX`), so it can register the pattern with a secret scanner; the key id is the row's id, which isn't secret and names the key in the UI. | optional expiry | SHA-256, unique. Keys imported from an app's own key table keep their format and are found by hash (§12.5). |
-| Reset, verification, invite tokens | 32 random bytes | 30 min / 24 h / 14 days | SHA-256, single use |
+| Reset, verification, invite and activation tokens | 32 random bytes | 30 min / 24 h / 14 days / 14 days | SHA-256, single use |
 
 Access token claims (all of them):
 
@@ -345,7 +345,7 @@ Access token claims (all of them):
 }
 ```
 
-- **The ID token adds** `nonce`, `auth_time`, `amr`, `email` and `email_verified`. Email stays out of access tokens, which end up in more logs.
+- **The ID token adds** `nonce`, `auth_time`, `amr`, `email` and `email_verified`. Email stays out of access tokens, which end up in more logs. Its `aud` is the client's id, as OIDC requires, where an access token's is the service.
 - **`amr` uses RFC 8176's names:** `pwd` for a password, `otp` for a TOTP or recovery code, `swk` and `user` for a passkey (attestation is `none`, so auth doesn't claim the key is hardware-bound), and `mfa` whenever the sign-in used two factors. A password with TOTP gives `["pwd","otp","mfa"]`, and a passkey `["swk","user","mfa"]`. An app that needs a second factor checks for `mfa` alone.
 - **Apps verify** `alg` = EdDSA (pinned, never read from the token), `iss`, `aud` = their own client's service, and `exp` with 30 s leeway.
 
@@ -394,20 +394,21 @@ JSON under `/v1`. The account and admin pages call the same handlers. Callers ar
 | `POST` / `DELETE /v1/me/totp` | Enroll (returns an `otpauth://` URI, confirmed with a code) or remove |
 | `POST /v1/me/recovery-codes` | Regenerate 10 codes, shown once |
 | `GET` / `POST` / `DELETE /v1/me/passkeys[/{id}]` | WebAuthn registration and removal |
-| `GET` / `DELETE /v1/me/sessions[/{id}]` | Devices; sign one out |
+| `GET` / `DELETE /v1/me/sessions[/{id}]` | Devices, including each public client's refresh-token family (§7.3); sign one out, or every one with `DELETE /v1/me/sessions` |
 | `GET` / `POST` / `DELETE /v1/me/app-passwords[/{id}]` | `{name, service: "mailbox", scopes: ["imap","smtp"]}`; the secret is shown once, and listed afterwards by name only |
 | `GET` / `POST` / `DELETE /v1/me/api-keys[/{id}]` | `{name, service, scopes, expires_at?}`; the secret is shown once |
-| `GET /v1/me/access` | Services and roles |
+| `GET /v1/me/access` | Services and roles, with each service's `app_password_scopes` and `api_key_scopes` |
 
-Changing password, MFA, passkeys, app passwords or keys, and deleting the account, need a sign-in in the last 15 minutes. Otherwise the answer is `403 {"error":"reauth_required"}` and the UI asks for the password or passkey again.
+Changing password, MFA, passkeys, app passwords or keys, or the recovery email, and deleting the account, need a sign-in in the last 15 minutes, and one that used the second factor when the account has one: otherwise a password alone could enroll a factor of its own or mint a protocol credential. Otherwise the answer is `403 {"error":"reauth_required"}` and the UI asks for the password or passkey again.
 
 **Administration** (`auth:admin`; the rows marked ★ also accept a service's own client, for its own service only, when it sets `manages_own_members`)
 
 | Method and path | Purpose |
 |---|---|
 | `GET /v1/users?q=&after=&limit=` ★ | List or search. A service's client sees only the enabled users with a role on its service, each as `{id, username, name, role}`, and its `q` matches the start of a username or name, or a whole email ignoring case, so it can't list addresses. |
-| `POST /v1/users` | `{username, name, email, kind?}`, then emails an activation link |
-| `GET` / `PATCH` / `DELETE /v1/users/{id}` | `PATCH {disabled: true}` disables |
+| `POST /v1/users` | `{username, name, email, kind?}`, then emails an activation link. A bot (`kind: "bot"`) has no email and takes `owner_id`, a person, defaulting to the calling admin. |
+| `GET` / `PATCH` / `DELETE /v1/users/{id}` | `PATCH {disabled: true}` disables; a bot's `owner_id` can be changed. A person who owns bots can't be deleted until they're deleted or given another owner (`409`). |
+| `GET` / `POST` / `DELETE /v1/users/{id}/app-passwords[/{id}]`, `…/api-keys[/{id}]` | A bot user's app passwords and API keys (A9), which it can't manage itself; refused for a person (`409`) |
 | `PUT /v1/users/{id}/access/{service}` ★ | `{role}`. Idempotent, so it creates or changes. |
 | `DELETE /v1/users/{id}/access/{service}` ★ | Remove access; `409 conflict` on a service with `signup: "open"` (§6) |
 | `GET /v1/users/{id}/access` ★ | A service client sees only its own row |
@@ -431,7 +432,7 @@ Content-Type: application/json
 
 ### 7.6 What each app implements
 
-Any OIDC client library can do the sign-in. This repo also ships `client/auth-client.ts` for apps on Bun or Node: one file, built-ins only (`node:crypto` for Ed25519), about 300 lines, covering the parts no standard library does (introspection with its cache, events). Apps vendor it at a pinned version.
+Any OIDC client library can do the sign-in. This repo also ships `client/auth-client.ts` for apps on Bun or Node: one file, built-ins only (`node:crypto` for Ed25519), about 600 lines with its types, covering the parts no standard library does (introspection with its cache, events). Apps vendor it at a pinned version.
 
 ```ts
 const auth = createAuthClient({
@@ -440,15 +441,17 @@ const auth = createAuthClient({
   clientId: process.env.AUTH_CLIENT_ID,
   clientSecret: process.env.AUTH_CLIENT_SECRET,
   redirectUri: process.env.AUTH_REDIRECT_URI,
+  audience: process.env.AUTH_AUDIENCE,        // optional: the service name in `aud`, when it differs from the client id
 });
 
 auth.startLogin(req)            // → { redirectUrl, loginCookie }
-auth.finishLogin(req)           // → { claims, idClaims, refreshToken }  (verifies state, nonce, JWT)
+auth.finishLogin(req)           // → { claims, idClaims, refreshToken }  (verifies state, nonce, JWT, and auth_time against maxAge or prompt=login)
 auth.refresh(refreshToken)      // → { claims } | throws InvalidGrant | throws Unavailable
 auth.verifyAccessToken(jwt)     // → claims   (JWKS cached 1 h; refetched on unknown kid)
 auth.introspect(secret)         // → { sub, username, role, scopes } | null   (cached by SHA-256: fresh 60 s, served stale up to 10 min only while auth is unreachable)
 auth.revoke(refreshToken)
-auth.readEvent(body)            // → { type, sub?, sid?, role?, id?, invite?, jti }  (verifies the SET)
+auth.readEvent(body)            // → { type, sub?, sid?, role?, id?, invite?, jti }  (verifies the SET; drops the cached answers it names)
+auth.forget({ sub?, id? })      // drops cached introspection answers, for the copies an event fans out to
 auth.logoutUrl(postLogoutRedirect)
 ```
 
@@ -465,12 +468,12 @@ auth.logoutUrl(postLogoutRedirect)
 - **JSON field names are `snake_case`**, as OAuth's are.
 - **One error shape everywhere, OAuth's:** `{"error": "<code>", "error_description": "<text>"}`. Codes: `invalid_request` 400, `unauthorized` 401, `forbidden` 403, `reauth_required` 403, `not_found` 404, `method_not_allowed` 405 (with `Allow`), `conflict` 409, `rate_limited` 429 (with `Retry-After`), `invalid_grant` and `invalid_client` 400/401 per RFC 6749, `server_error` 500, `temporarily_unavailable` 503.
 - **Lists:** `{"items": […], "next": "<cursor>" | null}`, with `?after=<cursor>&limit=` (at most 100).
-- **IDs** are prefixed by type: `usr_`, `ses_`, `apw_`, `key_`, `inv_`, `evt_`. Timestamps are RFC 3339 UTC.
+- **IDs** are prefixed by type: `usr_`, `ses_`, `apw_`, `key_`, `inv_`, `evt_`, `pk_` (passkeys). Timestamps are RFC 3339 UTC.
 - **Versioning:** the path is `/v1`. Additive changes don't bump it, and clients ignore unknown fields.
 
 ## 8. Data model
 
-A database and a role of auth's own. Plain SQL migrations run at boot under `pg_advisory_lock`, each one expand-only, so a copy still running the previous image keeps working while a rolling deploy replaces it.
+A database and a role of auth's own. Plain SQL migrations (`src/migrations`, recorded in `schema_migrations`) run at boot under `pg_advisory_lock`, each one expand-only, so a copy still running the previous image keeps working while a rolling deploy replaces it.
 
 ```sql
 CREATE TABLE users (
@@ -553,7 +556,8 @@ CREATE TABLE refresh_tokens (
   created_at  timestamptz NOT NULL DEFAULT now(),
   expires_at  timestamptz NOT NULL,
   rotated_at  timestamptz,
-  revoked_at  timestamptz
+  revoked_at  timestamptz,
+  amr         text[] NOT NULL DEFAULT '{}'           -- a public client's sign-in methods, for the MFA check at refresh
 );
 
 CREATE TABLE auth_codes (
@@ -676,9 +680,9 @@ CREATE UNLOGGED TABLE throttle (                      -- shared across every cop
 **Recovery codes:** 10 codes of 24 base32 characters (120 bits), shown as six groups of four. NIST SP 800-63B §5.1.2.2 asks for a salted password hash only for look-up secrets under 112 bits, so at this length a code is stored and found like an app password: by its SHA-256, in one indexed lookup scoped to the account. An attempt costs the same whether or not the account exists and however many codes it has left, and it never reaches the hashing semaphore. Each code is usable once; using one is audited and emailed.
 
 **Recovery email**
-- Must be verified.
+- Must be verified. A sign-up or a change sets the address only once its confirmation link is used, so neither can take, or reveal, an address another account uses: that address's owner gets a notice instead.
 - Changing it emails the old address, and the new one gets a confirmation link.
-- A reset link ends all sessions and refresh tokens and needs the second factor if one is enrolled. A user who has lost the second factor uses a recovery code, or an admin clears it (A5).
+- A reset link ends all sessions and refresh tokens and needs the second factor if one is enrolled: a TOTP code, a passkey, or a recovery code. A user who has lost the second factor uses a recovery code, or an admin clears it (A5).
 
 **App passwords and API keys**
 - They have at least 80 bits of entropy, out of reach of offline guessing, so SHA-256 is enough. It also lets the secret alone find its row (§7.3), which a salted hash couldn't, and a check takes microseconds.
@@ -693,7 +697,7 @@ CREATE UNLOGGED TABLE throttle (                      -- shared across every cop
 
 **CSRF on auth's pages** has three layers:
 1. A per-session synchronizer token, in forms and in the `X-CSRF-Token` header.
-2. `Origin` must equal the issuer's origin on every non-GET request. A missing `Origin` is refused.
+2. `Origin` must equal the issuer's origin on every non-GET request. A missing `Origin` is refused. Under `Referrer-Policy: no-referrer` a browser sends `Origin: null` on a same-origin form post, and says so with `Sec-Fetch-Site: same-origin`, which page scripts can't set; that pair counts as the issuer's origin.
 3. `SameSite=Lax`. Sign-in forms get a pre-session CSRF cookie, which blocks login CSRF.
 
 **Headers on every page:**
@@ -732,12 +736,12 @@ Counters live in the `throttle` table, so every copy shares them and a restart d
 |---|---|
 | Sign-in per account | 5 failures, then one attempt a minute, doubling up to 15 minutes. A successful sign-in or a reset clears it. There is no hard lockout, so nobody can lock another person out. |
 | Sign-in per IP | 30 per 15 minutes |
-| Second factor per session | 5 attempts, then the sign-in starts over |
+| Second factor per session | 5 attempts, then the sign-in starts over. Each failure also counts against the account's sign-in limit above, so starting over doesn't buy more guesses. |
 | A recovery code outside a sign-in (the U6 reset) | the per-account and per-IP sign-in limits above |
 | Reset, invite and sign-up emails | 3 per hour per address, 10 per hour per IP; the answer is the same whether or not the address exists |
 | Account creation (sign-up on an open service, or a first platform sign-in) | 10 per hour per IP |
 | `/oauth/token` per client | 60 per minute |
-| `/oauth/introspect` per client | 600 per minute. Failures are counted per client, and per end-user address the client names (the exception above), so a protocol server's brute-force limits stay effective. |
+| `/oauth/introspect` per client | 600 per minute. Failures are counted per client (1000 an hour) and per end-user address the client names (10 per 15 minutes; the exception above), so a protocol server's brute-force limits stay effective. Past either, the answer is `429`. A back channel through the proxy arrives with the proxy's `X-Real-IP`, the client's own address; that one keys no per-address counter, which would put all the client's users in one bucket. |
 
 ### 9.5 Threats and mitigations
 
@@ -774,6 +778,7 @@ Counters live in the `throttle` table, so every copy shares them and a restart d
 bun cli.ts user create --username alice --email alice@example.com --access auth:admin
 bun cli.ts user clear-mfa alice
 bun cli.ts client secret wiki        # prints a new secret once
+bun cli.ts help                      # also: user disable / enable / reset-link, client retire-old-secrets
 ```
 
 Every CLI action is audited as `host-cli` and posted to the alert webhook, if one is configured.
@@ -806,7 +811,7 @@ Every CLI action is audited as `host-cli` and posted to the alert webhook, if on
   - 128 MB and half a CPU (§10).
   - Two copies may run side by side during a deploy, so every piece of state lives in Postgres (§8).
   - A `HEALTHCHECK` on `/healthz`. SIGTERM finishes requests in flight and exits.
-- **Configuration**, all of it the deployment's own: the issuer URL, the services file (§6), `DATABASE_URL`, `AUTH_ENCRYPTION_KEY`, the API key prefix, the trusted proxies, the SMTP server for its emails, the audit retention (default 1 year), whether people may delete their own accounts (U14; default no), and an optional alert webhook. Secrets come from the environment, never from the image or the database (§9.3).
+- **Configuration**, all of it the deployment's own: the issuer URL (`ISSUER_URL`), the services file (§6, `SERVICES_FILE`), `DATABASE_URL`, `AUTH_ENCRYPTION_KEY`, the API key prefix (`API_KEY_PREFIX`), the trusted proxies (`TRUSTED_PROXIES`), the SMTP server for its emails (`SMTP_URL`, `EMAIL_FROM`), the audit retention (`AUDIT_RETENTION_DAYS`, default 1 year), whether people may delete their own accounts (U14; `ALLOW_ACCOUNT_DELETION`, default no), and an optional alert webhook (`ALERT_WEBHOOK_URL`). Secrets come from the environment, never from the image or the database (§9.3).
 - **No app depends on auth to start.** Apps fetch keys lazily and keep serving signed-in users while auth is down (§9.6).
 - **Database.** Postgres 16: a database and a role of auth's own, the database owned by that role, `CONNECT` revoked from `PUBLIC`, and `pg_hba.conf` allowing the role only from the network auth runs on. No app's role can connect to it.
 - **Break-glass CLI.** Runs inside a running container (§9.6).
@@ -896,7 +901,7 @@ An app that sends mail through a mail server, or a job that writes to another ap
 | 1 | MVP: users, passwords, TOTP, recovery codes, sessions, OIDC code+PKCE, refresh, JWKS, the services file, access, invites, events, audit, CLI, minimal account and admin pages | An OIDC test client completes sign-in, refresh, revocation and logout; the OpenID Foundation's Basic OP tests pass; the memory peak is measured |
 | 2 | App passwords and introspection; API keys; `client/auth-client.ts` | A password-only protocol server and an API client work end to end against a test deployment |
 | 3 | Passkeys; bot users; self-service account deletion | |
-| 4 | Platform sign-in through token exchange (§12.3) | |
+| 4 | Platform sign-in through token exchange (§12.3) | Not built in v1 (§3) |
 
 **Adopting auth in a deployment**, in an order that keeps every step reversible:
 1. **Prerequisites in the apps:** every session cookie `Secure`, and every password-only protocol server refusing AUTH before TLS.
