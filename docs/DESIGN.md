@@ -930,7 +930,6 @@ An app that sends mail through a mail server, or a job that writes to another ap
 
 ## 15. Open questions
 
-1. **License:** the repository has none yet. A product others deploy needs one.
-2. **Services at runtime:** the services file needs a restart to change. Is that enough, or do deployments need to register services through the management API?
-3. **Federation with outside identity providers** (sign in with an existing OIDC provider) is a non-goal for v1. What would make it a goal?
-4. **Groups shared across services** (a group such as "Support" that several apps give roles to) are a non-goal; an app's own groups are its own (§12.6). What signal would show that shared groups are needed: the same people granted the same roles in several apps, again and again?
+1. **Services at runtime:** the services file needs a restart to change. Is that enough, or do deployments need to register services through the management API?
+2. **Federation with outside identity providers** (sign in with an existing OIDC provider) is a non-goal for v1. What would make it a goal?
+3. **Groups shared across services** (a group such as "Support" that several apps give roles to) are a non-goal; an app's own groups are its own (§12.6). What signal would show that shared groups are needed: the same people granted the same roles in several apps, again and again?
