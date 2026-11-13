@@ -201,6 +201,11 @@
     });
   }
 
+  // Back, forward and links to #users, #audit… switch tabs too.
+  window.addEventListener("hashchange", function () {
+    if (services.length) go(location.hash.slice(1));
+  });
+
   TABS.forEach(function (t) {
     var b = el("button", { type: "button", "data-tab": t[0] }, t[1]);
     b.addEventListener("click", function () {
@@ -270,7 +275,7 @@
   function createUserForm() {
     var out = status();
     var kind = el("select", {}, el("option", { value: "person" }, "Person"), el("option", { value: "bot" }, "Bot"));
-    var username = el("input", { required: true, maxlength: "32", pattern: "[a-z][a-z0-9-]{1,30}[a-z0-9]", autocomplete: "off" });
+    var username = el("input", { required: true, maxlength: "32", pattern: "[a-z][a-z0-9\\-]{1,30}[a-z0-9]", autocomplete: "off" });
     var name = el("input", { maxlength: "200", autocomplete: "off" });
     var email = el("input", { type: "email", maxlength: "254", required: true, autocomplete: "off" });
     var owner = el("input", { maxlength: "40", placeholder: "usr_… (default: you)", autocomplete: "off" });
