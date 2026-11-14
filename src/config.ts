@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import type { EncryptionKey } from "./crypto";
 import { connect } from "./db";
 import { parseFrom, parseSmtpUrl, type SmtpSettings } from "./mail";
 import { parseCidr, type Cidr } from "./net";
@@ -15,7 +16,9 @@ export interface Config {
   // The issuer's origin, e.g. https://auth.example.com: no path, no trailing slash.
   issuer: string;
   services: Services;
-  encryptionKey: Buffer;
+  // Encrypts everything new; the others only decrypt (§9.3).
+  encryptionKey: EncryptionKey;
+  decryptionKeys: EncryptionKey[];
   apiKeyPrefix: string | null;
   trustedProxies: Cidr[];
   smtp: SmtpSettings;
@@ -74,13 +77,27 @@ export function loadConfig(env: Record<string, string | undefined>, readFile: Re
     }
   }
 
-  let encryptionKey = Buffer.alloc(0);
+  // Neither key is ever echoed: a message names the variable and the entry.
+  let encryptionKey: EncryptionKey = { version: 1, key: Buffer.alloc(0) };
   const rawKey = value("AUTH_ENCRYPTION_KEY");
   if (!rawKey) problems.push("AUTH_ENCRYPTION_KEY is required");
   else {
-    encryptionKey = /^[A-Za-z0-9+/_-]+={0,2}$/.test(rawKey) ? Buffer.from(rawKey, "base64") : Buffer.alloc(0);
-    if (encryptionKey.length !== 32) problems.push("AUTH_ENCRYPTION_KEY must be 32 bytes, base64-encoded (openssl rand -base64 32)");
+    const parsed = parseKey(rawKey, false);
+    if (parsed) encryptionKey = parsed;
+    else problems.push("AUTH_ENCRYPTION_KEY must be 32 bytes, base64-encoded (openssl rand -base64 32), optionally as v<N>:<base64>");
   }
+  const decryptionKeys: EncryptionKey[] = [];
+  value("AUTH_DECRYPTION_KEYS")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .forEach((entry, i) => {
+      const parsed = parseKey(entry, true);
+      if (!parsed) problems.push(`AUTH_DECRYPTION_KEYS entry ${i + 1} must be v<N>:<32 bytes, base64>`);
+      else if (parsed.version === encryptionKey.version || decryptionKeys.some((k) => k.version === parsed.version)) {
+        problems.push(`AUTH_DECRYPTION_KEYS entry ${i + 1} has version ${parsed.version}, which another key already has`);
+      } else decryptionKeys.push(parsed);
+    });
 
   const apiKeyPrefix = value("API_KEY_PREFIX") || null;
   if (apiKeyPrefix !== null && !API_KEY_PREFIX.test(apiKeyPrefix)) problems.push("API_KEY_PREFIX must match [a-z][a-z0-9]{1,15}");
@@ -146,6 +163,7 @@ export function loadConfig(env: Record<string, string | undefined>, readFile: Re
     issuer,
     services,
     encryptionKey,
+    decryptionKeys,
     apiKeyPrefix,
     trustedProxies,
     smtp,
@@ -154,6 +172,15 @@ export function loadConfig(env: Record<string, string | undefined>, readFile: Re
     allowAccountDeletion,
     alertWebhookUrl,
   };
+}
+
+// `v<N>:<base64>`, or a bare base64 key as version 1 where that's allowed.
+function parseKey(raw: string, versionRequired: boolean): EncryptionKey | null {
+  const m = /^(?:v(\d{1,4}):)?([A-Za-z0-9+/_-]+={0,2})$/.exec(raw);
+  if (!m?.[2] || (versionRequired && !m[1])) return null;
+  const version = m[1] ? Number(m[1]) : 1;
+  const key = Buffer.from(m[2], "base64");
+  return version >= 1 && key.length === 32 ? { version, key } : null;
 }
 
 function parseIssuer(raw: string, problems: string[]): string {

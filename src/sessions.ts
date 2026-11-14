@@ -1,6 +1,6 @@
 import type { SQL } from "bun";
 import type { App } from "./app";
-import { newId, randomToken, safeEqual, sha256 } from "./crypto";
+import { newId, randomToken, sha256 } from "./crypto";
 import { emit, emitSessionEnded } from "./events";
 import { clearCookie, fromIssuer, hostCookie, HttpError, setCookie } from "./http";
 
@@ -163,7 +163,7 @@ export function csrfToken(app: App, session: Session): string {
 export function requireCsrf(app: App, req: Request, session: Session): void {
   requireOrigin(app, req);
   const sent = req.headers.get("X-CSRF-Token") ?? "";
-  if (!safeEqual(sent, csrfToken(app, session))) {
+  if (!app.crypt.hmacMatches("csrf", session.token, sent)) {
     throw new HttpError(403, "forbidden", "The CSRF token is missing or wrong.");
   }
 }

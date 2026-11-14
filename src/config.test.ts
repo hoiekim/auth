@@ -24,7 +24,9 @@ describe("loadConfig", () => {
     expect(c.port).toBe(8080);
     expect(c.databaseUrl).toBe(DATABASE_URL);
     expect(c.issuer).toBe("https://auth.example.com");
-    expect(c.encryptionKey).toHaveLength(32);
+    expect(c.encryptionKey.key).toHaveLength(32);
+    expect(c.encryptionKey.version).toBe(1);
+    expect(c.decryptionKeys).toEqual([]);
     expect(c.apiKeyPrefix).toBe("testkey");
     expect(c.trustedProxies).toHaveLength(2);
     expect(c.smtp).toMatchObject({ host: "localhost", secure: "none" });
@@ -110,6 +112,34 @@ describe("loadConfig", () => {
     const found = problems({ ...ENV, AUTH_ENCRYPTION_KEY: key });
     expect(found).toHaveLength(1);
     expect(found[0]).toStartWith("AUTH_ENCRYPTION_KEY");
+  });
+
+  test("a versioned encryption key, and keys that only decrypt", () => {
+    const k1 = Buffer.alloc(32, 1).toString("base64");
+    const k2 = Buffer.alloc(32, 2).toString("base64url");
+    const c = load({ AUTH_ENCRYPTION_KEY: `v2:${k2}`, AUTH_DECRYPTION_KEYS: ` v1:${k1} ` });
+    expect(c.encryptionKey.version).toBe(2);
+    expect(c.encryptionKey.key.equals(Buffer.alloc(32, 2))).toBe(true);
+    expect(c.decryptionKeys.map((k) => k.version)).toEqual([1]);
+  });
+
+  test.each([
+    ["an entry without a version", (k: string) => k, "AUTH_DECRYPTION_KEYS entry 1 must be v<N>:<32 bytes, base64>"],
+    ["a short key", () => `v3:${Buffer.alloc(16).toString("base64")}`, "AUTH_DECRYPTION_KEYS entry 1 must be v<N>:<32 bytes, base64>"],
+    ["version 0", (k: string) => `v0:${k}`, "AUTH_DECRYPTION_KEYS entry 1 must be v<N>:<32 bytes, base64>"],
+    ["the encryption key's version", (k: string) => `v1:${k}`, "AUTH_DECRYPTION_KEYS entry 1 has version 1, which another key already has"],
+  ])("refuses AUTH_DECRYPTION_KEYS with %s, without echoing it", (_, entry, message) => {
+    const secret = Buffer.from("s3cret-pw-s3cret-pw-s3cret-pw-xx").toString("base64");
+    const found = problems({ ...ENV, AUTH_DECRYPTION_KEYS: entry(secret) });
+    expect(found).toEqual([message]);
+    expect(found.join("\n")).not.toContain(secret);
+  });
+
+  test("two decryption keys with one version are refused", () => {
+    const k = (n: number) => Buffer.alloc(32, n).toString("base64");
+    expect(problems({ ...ENV, AUTH_DECRYPTION_KEYS: `v2:${k(2)},v2:${k(3)}` })).toEqual([
+      "AUTH_DECRYPTION_KEYS entry 2 has version 2, which another key already has",
+    ]);
   });
 
   test("needs API_KEY_PREFIX only when a service declares API key scopes", () => {

@@ -67,7 +67,8 @@ deployment.
 | `DATABASE_URL` | yes | — | Postgres connection string for the auth database |
 | `ISSUER_URL` | yes | — | auth's own origin, the tokens' `iss` |
 | `SERVICES_FILE` | yes | — | Path to the services file (`docs/DESIGN.md` §6) |
-| `AUTH_ENCRYPTION_KEY` | yes | — | 32 bytes, base64; encrypts signing keys and TOTP secrets |
+| `AUTH_ENCRYPTION_KEY` | yes | — | 32 bytes, base64, optionally as `v<N>:<base64>`; encrypts signing keys and TOTP secrets |
+| `AUTH_DECRYPTION_KEYS` | during a key rotation | — | Other keys, `v<N>:<base64>`, comma-separated, that only decrypt |
 | `API_KEY_PREFIX` | when a service has `api_key_scopes` | — | Prefix of API keys, for secret scanners |
 | `TRUSTED_PROXIES` | no | none | IPs or CIDR ranges whose `X-Real-IP` is trusted |
 | `SMTP_URL` | yes | — | `smtps://` or `smtp://` (STARTTLS) server for auth's emails |
@@ -96,6 +97,7 @@ The first admin comes from the CLI, which prints an activation link:
 ```sh
 bun cli.ts user create --username alice --email alice@example.com --access auth:admin --print-link
 bun cli.ts client secret wiki    # a confidential client's secret, printed once
+bun cli.ts import users users.jsonl --dry-run
 bun cli.ts help
 ```
 

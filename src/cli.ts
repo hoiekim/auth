@@ -8,7 +8,9 @@ import { activationEmail, resetEmail, securityNotice } from "./emails";
 import { HttpError } from "./http";
 import { rotateKeys } from "./keys";
 import { smtpMailer, type MailMessage, type Mailer } from "./mail";
+import { importApiKeys, importUsers } from "./imports";
 import { migrate } from "./migrate";
+import { encryptionStatus, reencrypt } from "./rekey";
 import { endUserSessions } from "./sessions";
 import { issueToken } from "./tokens";
 import { transaction } from "./tx";
@@ -35,6 +37,17 @@ const HELP = `usage: bun cli.ts <command>
   client secret <client id>      Prints a new secret for a confidential client, once. The
                                  previous secret keeps working until retire-old-secrets.
   client retire-old-secrets <client id>
+  encryption status              Counts TOTP secrets and signing keys per encryption key version.
+  encryption reencrypt           Rewrites them all under AUTH_ENCRYPTION_KEY (a key rotation's
+                                 third step, docs/DESIGN.md §9.3).
+  import users <file | -> [--dry-run] [--print-links]
+      Creates users from JSON Lines: {"username", "email", "name"?, "email_verified"?,
+      "password_hash"? (argon2 or bcrypt), "access"? {"<service>": "<role>"}}. Users without
+      a password hash get an activation link by email, or printed with --print-links.
+  import api-keys --service <name> <file | -> [--dry-run]
+      Adds an app's existing API keys from JSON Lines: {"owner" (sub or username), "sha256",
+      "scopes", "name"?, "expires_at"?, "revoked_at"?, "created_at"?, "last_used_at"?}.
+      Both imports check every line first and write all or nothing; - reads standard input.
   migrate                        Applies pending migrations (the server does this at start).
 `;
 
@@ -42,6 +55,31 @@ export interface CliContext {
   app: App;
   mailer: Mailer;
   out: (line: string) => void;
+  // A file's text, or standard input's for "-".
+  readInput?: (path: string) => Promise<string>;
+}
+
+// Refused as it is read, before more is buffered: the CLI shares the
+// server's container (§10). Ten thousand lines fit well inside it.
+const MAX_INPUT_BYTES = 8 * 1024 * 1024;
+
+async function readInput(path: string): Promise<string> {
+  let stream: ReadableStream<Uint8Array>;
+  try {
+    const file = path === "-" ? Bun.stdin : Bun.file(path);
+    if (path !== "-" && !(await file.exists())) throw new Error("missing");
+    stream = file.stream();
+  } catch {
+    throw new UsageError(`can't read ${path}`);
+  }
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for await (const chunk of stream) {
+    size += chunk.byteLength;
+    if (size > MAX_INPUT_BYTES) throw new UsageError("the input is larger than 8 MB; split it");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 interface Args {
@@ -49,7 +87,7 @@ interface Args {
   flags: Map<string, string[]>;
 }
 
-const BOOLEAN_FLAGS = new Set(["bot", "print-link"]);
+const BOOLEAN_FLAGS = new Set(["bot", "print-link", "print-links", "dry-run"]);
 
 function parse(argv: string[]): Args {
   const positional: string[] = [];
@@ -194,6 +232,63 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
         ctx.out(`retired ${n} old secret(s) of ${client.id}`);
         await alert(ctx, `retired the old secrets of the client ${client.id}`);
       }
+      return 0;
+    }
+
+    if (group === "encryption" && (command === "status" || command === "reencrypt")) {
+      if (command === "status") {
+        for (const c of await encryptionStatus(app.sql, app.crypt)) {
+          const counts = Object.entries(c.byVersion).map(([v, n]) => `v${v}: ${n}`).join(", ") || "none";
+          ctx.out(`${c.label}: ${counts}${c.unreadable ? ` (${c.unreadable} under a key that isn't configured)` : ""}`);
+        }
+        ctx.out(`AUTH_ENCRYPTION_KEY is v${app.crypt.version}`);
+        return 0;
+      }
+      const results = await reencrypt(app.sql, app.crypt);
+      const failed = results.flatMap((r) => r.failed.map((id) => `${r.label}: ${id}`));
+      for (const r of results) ctx.out(`${r.label}: ${r.rewritten} rewritten under v${app.crypt.version}, ${r.current} already were`);
+      for (const f of failed) ctx.out(`no configured key reads ${f}; left as it was`);
+      const rewritten = results.reduce((n, r) => n + r.rewritten, 0);
+      await audit(app.sql, { actor: ACTOR, action: "encryption.reencrypt", detail: { version: app.crypt.version, rewritten, failed: failed.length } });
+      await alert(ctx, `re-encrypted ${rewritten} values under key v${app.crypt.version}${failed.length ? `; ${failed.length} unreadable` : ""}`);
+      return failed.length > 0 ? 1 : 0;
+    }
+
+    if (group === "import" && (command === "users" || command === "api-keys")) {
+      if (!target) throw new UsageError("name the input file, or - for standard input");
+      const text = await (ctx.readInput ?? readInput)(target);
+      const dryRun = args.flags.has("dry-run");
+      let problems: string[];
+      let count: number;
+      if (command === "users") {
+        const result = await importUsers(app, text, { dryRun });
+        problems = result.problems;
+        count = result.rows.length;
+        for (const u of result.rows) {
+          if (!u.activation) continue;
+          if (args.flags.has("print-links")) ctx.out(`${u.username}: ${app.config.issuer}/activate?token=${u.activation}`);
+          else await send(ctx, activationEmail(app.config.issuer, u.email, u.username, u.activation), u.username);
+        }
+      } else {
+        const name = one(args, "service");
+        const service = name ? app.services.get(name) : undefined;
+        if (!service) throw new UsageError("--service must name a service from the services file");
+        const result = await importApiKeys(app, service, text, { dryRun });
+        problems = result.problems;
+        count = result.rows.length;
+      }
+      for (const problem of problems) ctx.out(problem);
+      if (problems.length > 0) {
+        ctx.out(`nothing imported: ${problems.length} problem(s)`);
+        return 1;
+      }
+      if (dryRun) {
+        ctx.out("every line passed; nothing written (--dry-run)");
+        return 0;
+      }
+      const what = command === "users" ? "users" : "API keys";
+      ctx.out(`imported ${count} ${what}`);
+      await alert(ctx, `imported ${count} ${what}`);
       return 0;
     }
 

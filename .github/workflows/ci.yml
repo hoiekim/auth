@@ -110,6 +110,7 @@ jobs:
         run: |
           docker exec auth bun cli.ts user create --username ci-admin --email ci-admin@example.com --access auth:admin --print-link \
             | grep -q '^activation link'
+          docker exec auth bun cli.ts encryption status | grep -q '^signing keys: v1: 1$'
           docker exec auth bun -e "const r = await fetch('http://localhost:3000/.well-known/openid-configuration'); const d = await r.json(); process.exit(r.ok && d.issuer === 'https://auth.example.com' ? 0 : 1)"
 
       # docker stop sends SIGTERM, then SIGKILL after 10 seconds. A clean stop

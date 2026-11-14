@@ -37,7 +37,7 @@ export interface AppOverrides {
 export function createApp(config: Config, sql: SQL, mailer: Mailer, overrides: AppOverrides = {}): App {
   const log = overrides.log ?? ((line: string) => console.log(line));
   const fetchFn = overrides.fetch ?? fetch;
-  const crypt = new Encrypter(config.encryptionKey);
+  const crypt = new Encrypter(config.encryptionKey, config.decryptionKeys);
   const queue = mailQueue(mailer, log);
   return {
     config,

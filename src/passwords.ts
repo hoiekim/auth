@@ -43,9 +43,13 @@ export class Hasher {
   async verify(password: string, stored: string | null): Promise<{ ok: boolean; rehash: boolean }> {
     this.#dummy ??= this.hash("not a password anyone has: the dummy hash for unknown users");
     const target = stored ?? (await this.#dummy);
+    // A bcrypt hash can only have been imported (§13), and standard bcrypt
+    // reads the first 72 bytes of a password; Bun treats a longer one
+    // differently, so it gets what the source app's bcrypt got.
+    const input = target.startsWith("$2") ? Buffer.from(password, "utf8").subarray(0, 72) : password;
     let ok = false;
     try {
-      ok = await this.#slots.run(() => Bun.password.verify(password, target));
+      ok = await this.#slots.run(() => Bun.password.verify(input, target));
     } catch {
       ok = false;
     }
