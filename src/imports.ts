@@ -23,10 +23,20 @@ interface Line {
   value: Json;
 }
 
+// Enough for a deployment's users in one go, and few enough that each check
+// stays one query and the whole run stays small beside the server in its
+// container (§10). Larger imports are split into several files.
+export const MAX_LINES = 10_000;
+
 // Blank lines are skipped; a line that isn't a JSON object is a problem.
 function parseLines(text: string, problems: string[]): Line[] {
   const out: Line[] = [];
-  text.split(/\r?\n/).forEach((raw, i) => {
+  const raws = text.split(/\r?\n/);
+  if (raws.filter((r) => r.trim() !== "").length > MAX_LINES) {
+    problems.push(`the input has more than ${MAX_LINES} lines; split it`);
+    return out;
+  }
+  raws.forEach((raw, i) => {
     if (raw.trim() === "") return;
     let value: unknown;
     try {
@@ -46,18 +56,48 @@ function unknownFields(line: Line, allowed: string[], p: (msg: string) => void):
   for (const key of Object.keys(line.value)) if (!allowed.includes(key)) p(`unknown field "${key.slice(0, 40)}"`);
 }
 
-// RFC 3339 with a zone, as the API takes.
+// RFC 3339 with a zone, as the API takes, and a real calendar date: JS's
+// Date.parse rolls 30 February over into March, where Postgres refuses it.
 function timestamp(value: unknown): string | null | undefined {
   if (value === undefined || value === null) return null;
-  if (typeof value !== "string" || !/^\d{4}-\d\d-\d\dT\d\d:\d\d(:\d\d(\.\d+)?)?(Z|[+-]\d\d:\d\d)$/.test(value) || Number.isNaN(Date.parse(value))) {
-    return undefined;
-  }
-  return value;
+  if (typeof value !== "string") return undefined;
+  const m = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)(?::(\d\d)(?:\.\d{1,6})?)?(?:Z|[+-](\d\d):(\d\d))$/.exec(value);
+  if (!m) return undefined;
+  const [y, mo, d, h, mi, s, oh, om] = m.slice(1).map((x) => (x === undefined ? 0 : Number(x))) as number[];
+  const days = new Date(Date.UTC(y!, mo!, 0)).getUTCDate();
+  const ok = y! >= 1 && mo! >= 1 && mo! <= 12 && d! >= 1 && d! <= days && h! <= 23 && mi! <= 59 && s! <= 59 && oh! <= 15 && om! <= 59;
+  return ok ? value : undefined;
 }
 
 // The PHC strings Bun.password.verify reads: argon2 and bcrypt (§13).
-const ARGON2 = /^\$argon2(id|i|d)\$v=\d+\$m=\d+,t=\d+,p=\d+\$[A-Za-z0-9+/]+\$[A-Za-z0-9+/]+$/;
-const BCRYPT = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
+const ARGON2 = /^\$argon2(?:id|i|d)\$v=\d+\$m=(\d+),t=(\d+),p=(\d+)\$[A-Za-z0-9+/]+\$[A-Za-z0-9+/]+$/;
+const BCRYPT = /^\$2[aby]\$(\d{2})\$[./A-Za-z0-9]{53}$/;
+
+// An imported hash is verified at its own cost until the first sign-in
+// rehashes it, behind the same two hashing slots. More memory than §9.1's
+// 19 MiB would break the 38 MiB budget those slots keep (§10), so such a
+// hash is refused and its user takes an activation link instead; time is
+// bounded so two attempts can't hold both slots for long.
+export const MAX_ARGON2 = { memoryKiB: 19456, time: 3, parallelism: 4 };
+export const MAX_BCRYPT_COST = 12;
+
+function hashProblem(hash: string): string | null {
+  const a = ARGON2.exec(hash);
+  if (a) {
+    const [m, t, p] = [Number(a[1]), Number(a[2]), Number(a[3])];
+    if (m > MAX_ARGON2.memoryKiB || t > MAX_ARGON2.time || p > MAX_ARGON2.parallelism) {
+      return `password_hash costs more than this service verifies (argon2 at most m=${MAX_ARGON2.memoryKiB}, t=${MAX_ARGON2.time}, p=${MAX_ARGON2.parallelism}); leave it out and the user gets an activation link`;
+    }
+    return null;
+  }
+  const b = BCRYPT.exec(hash);
+  if (b) {
+    return Number(b[1]) > MAX_BCRYPT_COST
+      ? `password_hash costs more than this service verifies (bcrypt cost at most ${MAX_BCRYPT_COST}); leave it out and the user gets an activation link`
+      : null;
+  }
+  return "password_hash is not an argon2 or bcrypt PHC string";
+}
 
 export interface ImportedUser {
   id: string;
@@ -96,9 +136,9 @@ export async function importUsers(app: App, text: string, opts: { dryRun: boolea
     if (v.email_verified !== undefined && typeof v.email_verified !== "boolean") p("email_verified must be true or false");
     let hash: string | null = null;
     if (v.password_hash !== undefined && v.password_hash !== null) {
-      if (typeof v.password_hash !== "string" || v.password_hash.length > 512 || !(ARGON2.test(v.password_hash) || BCRYPT.test(v.password_hash))) {
-        p("password_hash is not an argon2 or bcrypt PHC string");
-      } else hash = v.password_hash;
+      const problem = typeof v.password_hash !== "string" || v.password_hash.length > 512 ? "password_hash is not an argon2 or bcrypt PHC string" : hashProblem(v.password_hash);
+      if (problem) p(problem);
+      else hash = v.password_hash as string;
     }
     const grants: { service: Service; role: string }[] = [];
     if (v.access !== undefined) {
@@ -127,7 +167,7 @@ export async function importUsers(app: App, text: string, opts: { dryRun: boolea
   problems.sort((a, b) => Number(/\d+/.exec(a)?.[0] ?? 0) - Number(/\d+/.exec(b)?.[0] ?? 0));
   if (problems.length > 0 || opts.dryRun) return { problems, rows: [] };
 
-  const rows = await transaction(app.sql, async (tx, after) => {
+  const rows = await writeAll(() => transaction(app.sql, async (tx, after) => {
     const done: ImportedUser[] = [];
     for (const u of checked) {
       const id = await insertUser(tx, { username: u.username, name: u.name, email: u.email, emailVerified: u.verified, kind: "person", ownerId: null, passwordHash: u.hash });
@@ -136,9 +176,23 @@ export async function importUsers(app: App, text: string, opts: { dryRun: boolea
       done.push({ id, username: u.username, email: u.email, activation: u.hash ? null : await issueToken(tx, "activate", id, u.email) });
     }
     return done;
-  });
-  return { problems: [], rows };
+  }));
+  return rows instanceof Array ? { problems: [], rows } : rows;
 }
+
+// The write is one transaction, so a failure part-way leaves nothing behind.
+// It is reported by the error's name only: a database message can quote a
+// value from the input.
+async function writeAll<T>(write: () => Promise<T[]>): Promise<T[] | ImportResult<T>> {
+  try {
+    return await write();
+  } catch (e) {
+    return { problems: [`writing failed (${e instanceof Error ? e.name : typeof e}); nothing was written`], rows: [] };
+  }
+}
+
+// What an owner may hold at once (credentials.ts), so their list stays one page.
+const MAX_KEYS_PER_OWNER = 100;
 
 export interface ImportedKey {
   id: string;
@@ -202,6 +256,16 @@ export async function importApiKeys(app: App, service: Service, text: string, op
     else if (!row.role) problems.push(`line ${k.n}: owner has no role on ${service.name}`);
     else owners.set(k.owner, row.id);
   }
+  // Live keys only, as the owner's own limit counts them.
+  const adding = new Map<string, number>();
+  for (const k of checked) if (!k.times.revoked_at && owners.has(k.owner)) adding.set(owners.get(k.owner)!, (adding.get(owners.get(k.owner)!) ?? 0) + 1);
+  for (const [userId, n] of adding) {
+    const [held] = await app.sql`SELECT count(*)::int AS n FROM credentials WHERE user_id = ${userId} AND kind = 'api_key' AND revoked_at IS NULL`;
+    if (held.n + n > MAX_KEYS_PER_OWNER) {
+      const first = checked.find((k) => owners.get(k.owner) === userId)!;
+      problems.push(`line ${first.n}: owner would hold ${held.n + n} live API keys, more than ${MAX_KEYS_PER_OWNER}`);
+    }
+  }
   if (hashes.size > 0) {
     const existing = await app.sql`SELECT encode(secret_hash, 'hex') AS h FROM credentials WHERE encode(secret_hash, 'hex') IN ${app.sql([...hashes.keys()])}`;
     for (const r of existing as { h: string }[]) problems.push(`line ${hashes.get(r.h)}: sha256 is already a credential`);
@@ -209,7 +273,7 @@ export async function importApiKeys(app: App, service: Service, text: string, op
   problems.sort((a, b) => Number(/\d+/.exec(a)?.[0] ?? 0) - Number(/\d+/.exec(b)?.[0] ?? 0));
   if (problems.length > 0 || opts.dryRun) return { problems, rows: [] };
 
-  const rows = await app.sql.begin(async (tx) => {
+  const rows = await writeAll(() => app.sql.begin(async (tx) => {
     const done: ImportedKey[] = [];
     for (const k of checked) {
       const id = newId("key");
@@ -223,6 +287,6 @@ export async function importApiKeys(app: App, service: Service, text: string, op
       done.push({ id, owner: userId });
     }
     return done;
-  });
-  return { problems: [], rows };
+  }));
+  return rows instanceof Array ? { problems: [], rows } : rows;
 }

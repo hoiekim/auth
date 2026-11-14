@@ -145,17 +145,24 @@ docker exec -i <container> bun cli.ts import api-keys --service tasks - < keys.j
 
 - **Users:** `{"username", "email", "name"?, "email_verified"?, "password_hash"?, "access"?: {"<service>": "<role>"}}`.
   `password_hash` is an argon2 or bcrypt PHC string, which the first sign-in
-  rehashes to today's parameters. Hashes made some other way (a pre-hash, a
-  truncation, another algorithm) can't be imported. A user without one gets
-  an activation link by email, or printed with `--print-links`.
+  rehashes to today's parameters. Until then it is verified at its own cost,
+  so only argon2 with at most `m=19456`, `t=3` and bcrypt with a cost of at
+  most 12 are taken (PHP's and some frameworks' argon2 defaults use more
+  memory); a bcrypt hash is checked against the password's first 72 bytes,
+  as standard bcrypt does. Hashes made some other way (a pre-hash, a
+  truncation, another algorithm, or over those costs) can't be imported:
+  leave `password_hash` out, and the user gets an activation link by email,
+  or printed with `--print-links`.
 - **API keys:** `{"owner", "sha256", "scopes", "name"?, "expires_at"?, "revoked_at"?, "created_at"?, "last_used_at"?}`.
   `owner` is the user's `sub` or username, and must already hold a role on
   the service; `sha256` is the SHA-256 of the full key, in hex or base64.
-  The keys keep their own format and keep working without reissue.
+  The keys keep their own format and keep working without reissue. An owner
+  holds at most 100 live keys, imported and created together.
 
 Each import checks every line first and writes all rows or none, listing
-problems by line number without echoing a hash or an address. Each row is
-audited as `host-cli`, and the import is alerted.
+problems by line number without echoing a hash or an address. It takes at
+most 10,000 lines and 8 MB; split a larger one into several files. Each row
+is audited as `host-cli`, and the import is alerted.
 
 ### Database
 

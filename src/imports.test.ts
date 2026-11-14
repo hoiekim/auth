@@ -1,6 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runCli } from "./cli";
+import { random } from "./crypto";
 import type { MailMessage } from "./mail";
 import { basic, Browser, makeUser, outboxEvents, TEST_DATABASE_URL, testApp, testDb, type TestApp, type TestDb } from "./testing/harness";
 
@@ -35,7 +39,8 @@ describe.skipIf(!TEST_DATABASE_URL)("imports", () => {
   describe("users", () => {
     test("bcrypt and argon2 hashes sign in with the old passwords, and are rehashed at the first sign-in", async () => {
       const bcrypt = await Bun.password.hash("old bcrypt password", { algorithm: "bcrypt", cost: 4 });
-      const argon = await Bun.password.hash("old argon password", { algorithm: "argon2id", memoryCost: 65536, timeCost: 3 });
+      // Within the hashing budget, but not today's parameters.
+      const argon = await Bun.password.hash("old argon password", { algorithm: "argon2id", memoryCost: 8192, timeCost: 3 });
       const { code, out } = await run(
         ["import", "users", "-"],
         jsonl(
@@ -106,6 +111,103 @@ describe.skipIf(!TEST_DATABASE_URL)("imports", () => {
       ]);
       expect(out.join("\n")).not.toContain("s3cret");
       expect(out.join("\n")).not.toContain("5f4dcc3b");
+    });
+
+    test("a hash that costs more than the hashing budget is refused, so its verify can't exhaust the container", async () => {
+      // Over the memory bound alone, and over the time bound alone.
+      const php = await Bun.password.hash("x", { algorithm: "argon2id", memoryCost: 65536, timeCost: 2 });
+      const slow = await Bun.password.hash("x", { algorithm: "argon2id", memoryCost: 19456, timeCost: 4 });
+      const { code, out } = await run(
+        ["import", "users", "-", "--dry-run"],
+        jsonl(
+          { username: "rita", email: "rita@example.com", password_hash: php },
+          { username: "sam", email: "sam@example.com", password_hash: slow },
+          { username: "tom", email: "tom@example.com", password_hash: `$2b$13$${"a".repeat(53)}` },
+          { username: "uma", email: "uma@example.com", password_hash: `$2b$12$${"a".repeat(53)}` },
+        ),
+      );
+      expect(code).toBe(1);
+      expect(out).toEqual([
+        "line 1: password_hash costs more than this service verifies (argon2 at most m=19456, t=3, p=4); leave it out and the user gets an activation link",
+        "line 2: password_hash costs more than this service verifies (argon2 at most m=19456, t=3, p=4); leave it out and the user gets an activation link",
+        "line 3: password_hash costs more than this service verifies (bcrypt cost at most 12); leave it out and the user gets an activation link",
+        "nothing imported: 3 problem(s)",
+      ]);
+    });
+
+    test("bcrypt verifies the first 72 bytes, as the source app's bcrypt did", async () => {
+      const long = "a long passphrase that goes on past the seventy-two byte limit of bcrypt: é!";
+      expect(Buffer.byteLength(long)).toBeGreaterThan(72);
+      // What a standard bcrypt makes of the full password: a hash of its first 72 bytes.
+      const hash = await Bun.password.hash(Buffer.from(long).subarray(0, 72), { algorithm: "bcrypt", cost: 4 });
+      expect((await run(["import", "users", "-"], jsonl({ username: "vic", email: "vic@example.com", password_hash: hash }))).code).toBe(0);
+      expect((await new Browser(t).signIn("vic", long)).status).toBe(303);
+      // Rehashed from the full password, which still signs in.
+      expect((await new Browser(t).signIn("vic", long)).status).toBe(303);
+    });
+
+    test("a write that fails part-way leaves nothing behind and sends nothing", async () => {
+      await db.sql.unsafe(`
+        CREATE FUNCTION refuse_boom() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN IF NEW.username = 'boom' THEN RAISE EXCEPTION 'refused for the test'; END IF; RETURN NEW; END $$;
+        CREATE TRIGGER refuse_boom BEFORE INSERT ON users FOR EACH ROW EXECUTE FUNCTION refuse_boom();`);
+      try {
+        const before = await userCount();
+        const { code, out, sent } = await run(
+          ["import", "users", "-"],
+          jsonl({ username: "first-ok", email: "first-ok@example.com" }, { username: "boom", email: "boom@example.com" }),
+        );
+        expect(code).toBe(1);
+        expect(out).toEqual(["writing failed (PostgresError); nothing was written", "nothing imported: 1 problem(s)"]);
+        expect(await userCount()).toBe(before);
+        expect(sent).toHaveLength(0);
+      } finally {
+        await db.sql.unsafe("DROP TRIGGER refuse_boom ON users; DROP FUNCTION refuse_boom();");
+      }
+    });
+
+    test("the other refusals, each by line", async () => {
+      const { out } = await run(
+        ["import", "users", "-", "--dry-run"],
+        jsonl(
+          { username: "Not_Valid", email: "a@example.com" },
+          { username: "wes", email: "same@example.com" },
+          { username: "xia", email: "SAME@example.com" },
+          { username: "yan", email: "y@example.com", name: "x".repeat(201) },
+          { username: "zed", email: "z@example.com", email_verified: "yes" },
+          { username: "abe", email: "abe@example.com", access: ["wiki"] },
+        ),
+      );
+      expect(out).toEqual([
+        "line 1: username must be 3 to 32 characters: a–z, 0–9 and '-', starting with a letter and not ending with '-'",
+        "line 3: email is also on line 2",
+        "line 4: name must be text of at most 200 characters",
+        "line 5: email_verified must be true or false",
+        "line 6: access must be an object of service: role",
+        "nothing imported: 5 problem(s)",
+      ]);
+    });
+
+    test("more than 10,000 lines are refused before any check", async () => {
+      const lines = Array.from({ length: 10_001 }, (_, i) => JSON.stringify({ username: `bulk-${i}`, email: `bulk${i}@example.com` })).join("\n");
+      expect((await run(["import", "users", "-"], lines)).out[0]).toBe("the input has more than 10000 lines; split it");
+    });
+
+    test("an input over 8 MB is refused as it is read; a missing file is named", async () => {
+      const big = join(tmpdir(), `import-test-${random(6).toString("hex")}.jsonl`);
+      const missing = join(tmpdir(), `import-test-${random(6).toString("hex")}-missing.jsonl`);
+      writeFileSync(big, "x".repeat(8 * 1024 * 1024 + 1));
+      const cli = async (argv: string[]) => {
+        const out: string[] = [];
+        const code = await runCli(argv, { app: t.app, mailer: { send: async () => {} }, out: (l) => out.push(l) });
+        return { code, out };
+      };
+      try {
+        expect(await cli(["import", "users", big])).toEqual({ code: 2, out: ["error: the input is larger than 8 MB; split it"] });
+        expect(await cli(["import", "users", missing])).toEqual({ code: 2, out: [`error: can't read ${missing}`] });
+      } finally {
+        unlinkSync(big);
+      }
     });
 
     test("--dry-run checks and writes nothing", async () => {
@@ -205,6 +307,59 @@ describe.skipIf(!TEST_DATABASE_URL)("imports", () => {
       expect(out).toEqual(["every line passed; nothing written (--dry-run)"]);
       expect((await db.sql`SELECT count(*)::int AS n FROM credentials`)[0].n).toBe(before);
       expect((await introspect(key(20))).active).toBe(false);
+    });
+
+    test("dates that don't exist, a bad owner or a bad name are refused at the check, not at the write", async () => {
+      const { code, out } = await run(
+        ["import", "api-keys", "--service", "tasks", "-", "--dry-run"],
+        jsonl(
+          { owner: "rae", sha256: sha(key(30)).toString("hex"), scopes: ["tasks:read"], expires_at: "2027-02-30T00:00:00Z" },
+          { owner: "rae", sha256: sha(key(31)).toString("hex"), scopes: ["tasks:read"], created_at: "0000-01-01T00:00:00Z" },
+          { owner: "Not A User!", sha256: sha(key(32)).toString("hex"), scopes: ["tasks:read"] },
+          { owner: "rae", sha256: sha(key(33)).toString("hex"), scopes: ["tasks:read"], name: "" },
+          { owner: "rae", sha256: sha(key(34)).toString("hex"), scopes: ["tasks:read"], expires_at: "2027-02-28T23:59:59.5+09:30" },
+        ),
+      );
+      expect(code).toBe(1);
+      expect(out).toEqual([
+        "line 1: expires_at must be an RFC 3339 timestamp",
+        "line 2: created_at must be an RFC 3339 timestamp",
+        "line 3: owner must be a user's sub (usr_…) or username",
+        "line 4: name is 1 to 100 characters",
+        "nothing imported: 4 problem(s)",
+      ]);
+    });
+
+    test("an owner keeps at most 100 live keys, so their list stays one page", async () => {
+      const many = Array.from({ length: 101 }, (_, i) => ({ owner: "rae", sha256: sha(key(1000 + i)).toString("hex"), scopes: ["tasks:read"] }));
+      const { code, out } = await run(["import", "api-keys", "--service", "tasks", "-", "--dry-run"], jsonl(...many));
+      expect(code).toBe(1);
+      expect(out[0]).toMatch(/^line 1: owner would hold 1\d\d live API keys, more than 100$/);
+      // Revoked keys don't count.
+      const revoked = many.map((k) => ({ ...k, revoked_at: "2026-01-01T00:00:00Z" }));
+      expect((await run(["import", "api-keys", "--service", "tasks", "-", "--dry-run"], jsonl(...revoked))).code).toBe(0);
+    });
+
+    test("a write that fails part-way leaves no key behind", async () => {
+      await db.sql.unsafe(`
+        CREATE FUNCTION refuse_boom_key() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN IF NEW.name = 'boom' THEN RAISE EXCEPTION 'refused for the test'; END IF; RETURN NEW; END $$;
+        CREATE TRIGGER refuse_boom_key BEFORE INSERT ON credentials FOR EACH ROW EXECUTE FUNCTION refuse_boom_key();`);
+      try {
+        const before = (await db.sql`SELECT count(*)::int AS n FROM credentials`)[0].n;
+        const { code, out } = await run(
+          ["import", "api-keys", "--service", "tasks", "-"],
+          jsonl(
+            { owner: "rae", sha256: sha(key(40)).toString("hex"), scopes: ["tasks:read"], name: "fine" },
+            { owner: "rae", sha256: sha(key(41)).toString("hex"), scopes: ["tasks:read"], name: "boom" },
+          ),
+        );
+        expect(code).toBe(1);
+        expect(out[0]).toBe("writing failed (PostgresError); nothing was written");
+        expect((await db.sql`SELECT count(*)::int AS n FROM credentials`)[0].n).toBe(before);
+      } finally {
+        await db.sql.unsafe("DROP TRIGGER refuse_boom_key ON credentials; DROP FUNCTION refuse_boom_key();");
+      }
     });
 
     test("a service without API key scopes, or an unknown one, takes none", async () => {

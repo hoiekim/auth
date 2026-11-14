@@ -59,17 +59,27 @@ export interface CliContext {
   readInput?: (path: string) => Promise<string>;
 }
 
-const MAX_INPUT_BYTES = 64 * 1024 * 1024;
+// Refused as it is read, before more is buffered: the CLI shares the
+// server's container (§10). Ten thousand lines fit well inside it.
+const MAX_INPUT_BYTES = 8 * 1024 * 1024;
 
 async function readInput(path: string): Promise<string> {
-  let text: string;
+  let stream: ReadableStream<Uint8Array>;
   try {
-    text = path === "-" ? await Bun.stdin.text() : await Bun.file(path).text();
+    const file = path === "-" ? Bun.stdin : Bun.file(path);
+    if (path !== "-" && !(await file.exists())) throw new Error("missing");
+    stream = file.stream();
   } catch {
     throw new UsageError(`can't read ${path}`);
   }
-  if (text.length > MAX_INPUT_BYTES) throw new UsageError("the input is larger than 64 MB; split it");
-  return text;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for await (const chunk of stream) {
+    size += chunk.byteLength;
+    if (size > MAX_INPUT_BYTES) throw new UsageError("the input is larger than 8 MB; split it");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 interface Args {
