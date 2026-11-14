@@ -87,54 +87,103 @@ export function newId(prefix: IdPrefix): string {
 
 export const ID_PATTERN = /^[a-z]{2,3}_[0-9a-hjkmnp-tv-z]{26}$/;
 
-// AES-256-GCM with a key version prefix and the row id as additional data, so
-// a ciphertext moved to another row fails to decrypt.
-const VERSION = Buffer.from("v1:");
+// AES-256-GCM with the key's version as a prefix and the row id as
+// additional data, so a ciphertext moved to another row fails to decrypt,
+// and the key can be rotated (docs/DESIGN.md §9.3): new data is written
+// under the current key, and every configured key still reads what it wrote.
+
+export interface EncryptionKey {
+  version: number;
+  key: Buffer;
+}
+
+const VERSION_PREFIX = /^v(\d{1,4}):/;
 
 export class Encrypter {
-  readonly #key: Buffer;
+  readonly #current: EncryptionKey;
+  readonly #keys: Map<number, Buffer>;
   readonly #subkeys = new Map<string, Buffer>();
 
-  constructor(key: Buffer) {
-    if (key.length !== 32) throw new Error("the encryption key must be 32 bytes");
-    this.#key = key;
+  // `current` encrypts; `others` only decrypt. A bare key is version 1.
+  constructor(current: EncryptionKey | Buffer, others: EncryptionKey[] = []) {
+    this.#current = Buffer.isBuffer(current) ? { version: 1, key: current } : current;
+    this.#keys = new Map();
+    for (const k of [this.#current, ...others]) {
+      if (k.key.length !== 32) throw new Error("an encryption key must be 32 bytes");
+      if (!Number.isInteger(k.version) || k.version < 1 || k.version > 9999) throw new Error("a key version is 1 to 9999");
+      if (this.#keys.has(k.version)) throw new Error(`two encryption keys have version ${k.version}`);
+      this.#keys.set(k.version, k.key);
+    }
+  }
+
+  get version(): number {
+    return this.#current.version;
+  }
+
+  get versions(): number[] {
+    return [...this.#keys.keys()];
+  }
+
+  // The key version a ciphertext was written under, or null when it has none.
+  static versionOf(sealed: Uint8Array): number | null {
+    const m = VERSION_PREFIX.exec(Buffer.from(sealed.subarray(0, 6)).toString("latin1"));
+    return m?.[1] ? Number(m[1]) : null;
   }
 
   encrypt(plaintext: Uint8Array, aad: string): Buffer {
-    return seal(this.#key, plaintext, aad);
+    return seal(this.#current.key, this.#current.version, plaintext, aad);
   }
 
   decrypt(sealed: Uint8Array, aad: string): Buffer {
-    return open(this.#key, sealed, aad);
+    const version = Encrypter.versionOf(sealed);
+    const key = version === null ? undefined : this.#keys.get(version);
+    if (!key || version === null) throw new Error("no configured key for this ciphertext's version");
+    return open(key, sealed, aad);
   }
 
   // A key for one purpose, derived so that no two purposes share key material
   // with each other or with encryption at rest.
-  subkey(purpose: string): Buffer {
-    let k = this.#subkeys.get(purpose);
+  #subkey(version: number, purpose: string): Buffer {
+    const id = `${version}:${purpose}`;
+    let k = this.#subkeys.get(id);
     if (!k) {
-      k = Buffer.from(hkdfSync("sha256", this.#key, Buffer.alloc(0), `auth:${purpose}`, 32));
-      this.#subkeys.set(purpose, k);
+      k = Buffer.from(hkdfSync("sha256", this.#keys.get(version)!, Buffer.alloc(0), `auth:${purpose}`, 32));
+      this.#subkeys.set(id, k);
     }
     return k;
   }
 
   hmac(purpose: string, data: string): string {
-    return createHmac("sha256", this.subkey(purpose)).update(data).digest("base64url");
+    return createHmac("sha256", this.#subkey(this.#current.version, purpose)).update(data).digest("base64url");
+  }
+
+  // Whether `candidate` is the HMAC of `data` under any configured key, so a
+  // value issued before a rotation still holds after it.
+  hmacMatches(purpose: string, data: string, candidate: string): boolean {
+    let ok = false;
+    for (const version of this.#keys.keys()) {
+      const expected = createHmac("sha256", this.#subkey(version, purpose)).update(data).digest("base64url");
+      if (safeEqual(candidate, expected)) ok = true;
+    }
+    return ok;
   }
 
   // A short-lived, tamper-proof, confidential value handed to the browser or
   // a client and read back later: a pending second factor, a TOTP enrolment,
-  // a WebAuthn challenge. `expiresAt` is in milliseconds.
+  // a WebAuthn challenge.
   sealValue(purpose: string, value: unknown, ttlSeconds: number): string {
     const body = JSON.stringify({ v: value, exp: Date.now() + ttlSeconds * 1000 });
-    return base64url(seal(this.subkey(`sealed:${purpose}`), Buffer.from(body), purpose));
+    const version = this.#current.version;
+    return base64url(seal(this.#subkey(version, `sealed:${purpose}`), version, Buffer.from(body), purpose));
   }
 
   openValue<T>(purpose: string, token: string | null | undefined): T | null {
     if (!token || token.length > 8192) return null;
     try {
-      const body = JSON.parse(open(this.subkey(`sealed:${purpose}`), fromBase64url(token), purpose).toString("utf8"));
+      const sealed = fromBase64url(token);
+      const version = Encrypter.versionOf(sealed);
+      if (version === null || !this.#keys.has(version)) return null;
+      const body = JSON.parse(open(this.#subkey(version, `sealed:${purpose}`), sealed, purpose).toString("utf8"));
       if (typeof body !== "object" || body === null || typeof body.exp !== "number" || body.exp < Date.now()) return null;
       return body.v as T;
     } catch {
@@ -143,22 +192,22 @@ export class Encrypter {
   }
 }
 
-function seal(key: Buffer, plaintext: Uint8Array, aad: string): Buffer {
+function seal(key: Buffer, version: number, plaintext: Uint8Array, aad: string): Buffer {
   const iv = random(12);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   cipher.setAAD(Buffer.from(aad));
   const body = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  return Buffer.concat([VERSION, iv, body, cipher.getAuthTag()]);
+  return Buffer.concat([Buffer.from(`v${version}:`), iv, body, cipher.getAuthTag()]);
 }
 
+// The caller chose `key` by the version in this same prefix.
 function open(key: Buffer, sealed: Uint8Array, aad: string): Buffer {
   const buf = Buffer.from(sealed);
-  if (buf.length < VERSION.length + 12 + 16 || !buf.subarray(0, VERSION.length).equals(VERSION)) {
-    throw new Error("unknown ciphertext version");
-  }
-  const iv = buf.subarray(VERSION.length, VERSION.length + 12);
+  const prefix = VERSION_PREFIX.exec(buf.subarray(0, 6).toString("latin1"))?.[0].length ?? 0;
+  if (prefix === 0 || buf.length < prefix + 12 + 16) throw new Error("unknown ciphertext version");
+  const iv = buf.subarray(prefix, prefix + 12);
   const tag = buf.subarray(buf.length - 16);
-  const body = buf.subarray(VERSION.length + 12, buf.length - 16);
+  const body = buf.subarray(prefix + 12, buf.length - 16);
   const decipher = createDecipheriv("aes-256-gcm", key, iv);
   decipher.setAAD(Buffer.from(aad));
   decipher.setAuthTag(tag);
