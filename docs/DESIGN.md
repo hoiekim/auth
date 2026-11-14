@@ -717,9 +717,16 @@ CREATE UNLOGGED TABLE throttle (                      -- shared across every cop
   - Apps cache JWKS for an hour and refetch on an unknown `kid`, so a rotation is invisible to them.
   - Rotation runs in whichever copy takes the advisory lock first.
 - **Encryption at rest:** private signing keys and TOTP secrets are encrypted with AES-256-GCM.
-  - The key is `AUTH_ENCRYPTION_KEY`, 32 bytes, kept in the container's environment and never in the database.
-  - Ciphertext starts with a key version (`v1:`), so the key can be rotated.
+  - The key is `AUTH_ENCRYPTION_KEY`, 32 bytes, kept in the container's environment and never in the database. It is written `v<N>:<base64>`; a bare base64 key is version 1.
+  - Ciphertext starts with its key's version (`v1:`), so the key can be rotated. `AUTH_DECRYPTION_KEYS` lists other versioned keys, which only decrypt.
   - The row id is the GCM additional data, so a ciphertext can't be moved to another row.
+  - **Rotating the key** takes four deploys, so two copies running side by side can always read what the other writes:
+    1. Add the new key to `AUTH_DECRYPTION_KEYS`. Every copy can now read it.
+    2. Make it `AUTH_ENCRYPTION_KEY`, and move the old one to `AUTH_DECRYPTION_KEYS`.
+    3. Run `bun cli.ts encryption reencrypt`, which rewrites every TOTP secret and private signing key under the new key. `bun cli.ts encryption status` then shows none left under the old one.
+    4. Remove the old key. Keep it offline for as long as backups taken before step 3 are kept.
+
+    CSRF tokens and the short-lived sealed values handed to browsers (§9.2) are derived from the key; each is accepted under any configured key, so a rotation signs nobody out.
 - **What a database leak yields:** argon2id hashes, SHA-256 hashes of high-entropy secrets, and ciphertext. Nothing in it can be used to sign in (§3).
 - **Database access:**
   - auth's role owns only auth's database, and `CONNECT` on it is revoked from `PUBLIC`.
@@ -778,12 +785,14 @@ Counters live in the `throttle` table, so every copy shares them and a restart d
 bun cli.ts user create --username alice --email alice@example.com --access auth:admin
 bun cli.ts user clear-mfa alice
 bun cli.ts client secret wiki        # prints a new secret once
-bun cli.ts help                      # also: user disable / enable / reset-link, client retire-old-secrets
+bun cli.ts encryption status         # rows per encryption key version (§9.3)
+bun cli.ts help                      # also: user disable / enable / reset-link, client retire-old-secrets,
+                                     # encryption reencrypt, import users / api-keys (§12.5, §13)
 ```
 
 Every CLI action is audited as `host-cli` and posted to the alert webhook, if one is configured.
 
-**Backups.** Losing auth's database locks everyone out of every integrated app. Back it up off the host it runs on, encrypted, for example with a nightly `pg_dump` encrypted with `age` to a public key. Restoring it also needs `AUTH_ENCRYPTION_KEY`; keep that offline, separately.
+**Backups.** Losing auth's database locks everyone out of every integrated app. Back it up off the host it runs on, encrypted, for example with a nightly `pg_dump` encrypted with `age` to a public key. Restoring it also needs the encryption key it was taken under (`AUTH_ENCRYPTION_KEY`, or an older one after a rotation); keep those offline, separately.
 
 ## 10. Performance and resources
 
@@ -811,7 +820,7 @@ Every CLI action is audited as `host-cli` and posted to the alert webhook, if on
   - 128 MB and half a CPU (§10).
   - Two copies may run side by side during a deploy, so every piece of state lives in Postgres (§8).
   - A `HEALTHCHECK` on `/healthz`. SIGTERM finishes requests in flight and exits.
-- **Configuration**, all of it the deployment's own: the issuer URL (`ISSUER_URL`), the services file (§6, `SERVICES_FILE`), `DATABASE_URL`, `AUTH_ENCRYPTION_KEY`, the API key prefix (`API_KEY_PREFIX`), the trusted proxies (`TRUSTED_PROXIES`), the SMTP server for its emails (`SMTP_URL`, `EMAIL_FROM`), the audit retention (`AUDIT_RETENTION_DAYS`, default 1 year), whether people may delete their own accounts (U14; `ALLOW_ACCOUNT_DELETION`, default no), and an optional alert webhook (`ALERT_WEBHOOK_URL`). Secrets come from the environment, never from the image or the database (§9.3).
+- **Configuration**, all of it the deployment's own: the issuer URL (`ISSUER_URL`), the services file (§6, `SERVICES_FILE`), `DATABASE_URL`, `AUTH_ENCRYPTION_KEY` and, during a rotation, `AUTH_DECRYPTION_KEYS` (§9.3), the API key prefix (`API_KEY_PREFIX`), the trusted proxies (`TRUSTED_PROXIES`), the SMTP server for its emails (`SMTP_URL`, `EMAIL_FROM`), the audit retention (`AUDIT_RETENTION_DAYS`, default 1 year), whether people may delete their own accounts (U14; `ALLOW_ACCOUNT_DELETION`, default no), and an optional alert webhook (`ALERT_WEBHOOK_URL`). Secrets come from the environment, never from the image or the database (§9.3).
 - **No app depends on auth to start.** Apps fetch keys lazily and keep serving signed-in users while auth is down (§9.6).
 - **Database.** Postgres 16: a database and a role of auth's own, the database owned by that role, `CONNECT` revoked from `PUBLIC`, and `pg_hba.conf` allowing the role only from the network auth runs on. No app's role can connect to it.
 - **Break-glass CLI.** Runs inside a running container (§9.6).
@@ -860,7 +869,7 @@ For IMAP, SMTP, CalDAV, WebDAV and the like:
 ### 12.5 API keys for an app's API
 
 - **The app checks a `Bearer` key with `auth.introspect`**, and gets back its owner, the owner's current role on the service, and the key's scopes. It authorizes the request by both: a scope grants only what the role also allows, so a key loses power when its owner is moved to a lower role (rule 3). The service declares its scopes in the services file.
-- **An app with its own key table can move it into auth:** copy each key's hash, scopes, expiry and revocation into `credentials`, with its owner mapped through `auth_sub`. When the old hashes are SHA-256 of the full key, introspection finds them by hash, so **existing keys keep working without reissue**.
+- **An app with its own key table can move it into auth:** copy each key's hash, scopes, expiry and revocation into `credentials`, with its owner mapped through `auth_sub`. When the old hashes are SHA-256 of the full key, introspection finds them by hash, so **existing keys keep working without reissue**. The CLI does the copy: `bun cli.ts import api-keys --service <name> <file>` reads one JSON object per line, `{"owner", "sha256", "scopes", "name"?, "expires_at"?, "revoked_at"?, "created_at"?, "last_used_at"?}`, where `owner` is the user's `sub` or username and `sha256` is the key's hash in hex or base64. Each owner must already hold a role on the service.
 
 ### 12.6 An app with resources inside it, and its own members
 
@@ -910,7 +919,9 @@ An app that sends mail through a mail server, or a job that writes to another ap
 4. **Password-only protocols:** users create app passwords, and then a cutover date turns off the old local passwords.
 5. **Clean up:** remove local sign-in code, password columns and flags, one release after nothing has used the fallbacks (audit `login.local` = 0).
 
-**Moving existing users.** For a handful of people, create their accounts with the CLI and let auth email each one an activation link (set a password, enroll TOTP). That is simpler and safer than importing hashes. For more users, import their existing password hashes as a one-off: `Bun.password.verify` reads argon2id and bcrypt PHC strings and re-hashes to argon2id at the first sign-in. Note that bcrypt reads only the first 72 bytes of a password, and some apps truncate before hashing; an import has to verify the way the source app hashed.
+**Moving existing users.** For a handful of people, create their accounts with the CLI and let auth email each one an activation link (set a password, enroll TOTP). That is simpler and safer than importing hashes. For more users, import their existing password hashes as a one-off: `Bun.password.verify` reads argon2id and bcrypt PHC strings and re-hashes to argon2id at the first sign-in. Note that bcrypt reads only the first 72 bytes of a password, and some apps truncate before hashing; an import has to verify the way the source app hashed. `bun cli.ts import users <file>` reads one JSON object per line, `{"username", "email", "name"?, "email_verified"?, "password_hash"?, "access"?: {"<service>": "<role>"}}`. A user without a password hash gets an activation link, as with `user create`.
+
+Both imports are all or nothing: every line is checked first, every problem is listed by line number without echoing a hash, and nothing is written unless all pass. `--dry-run` stops after the checks, and `-` in place of the file reads standard input, so a file on the operator's machine can be piped into `docker exec -i`. Each imported row is audited as `host-cli`.
 
 ## 14. Alternatives considered
 
