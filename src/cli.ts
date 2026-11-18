@@ -10,6 +10,7 @@ import { rotateKeys } from "./keys";
 import { smtpMailer, type MailMessage, type Mailer } from "./mail";
 import { importApiKeys, importUsers } from "./imports";
 import { migrate } from "./migrate";
+import { lockClient } from "./registry";
 import { encryptionStatus, reencrypt } from "./rekey";
 import { endUserSessions } from "./sessions";
 import { issueToken } from "./tokens";
@@ -216,8 +217,13 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
     if (group === "client" && (command === "secret" || command === "retire-old-secrets")) {
       const client = target ? app.services.client(target) : undefined;
       if (!client || client.type !== "confidential") throw new UsageError("name a confidential client");
+      const service = app.services.get(client.service)!;
       if (command === "secret") {
         const secret = await transaction(app.sql, async (tx) => {
+          // A registered client removed since the services were read gets
+          // no secret that a client registered later under its id would
+          // inherit (§6.2): client_secrets has no foreign key to clients.
+          await lockClient(tx, service, client);
           const s = await rotateClientSecret(tx, client.id);
           await audit(tx, { actor: ACTOR, action: "client.secret", detail: { client: client.id } });
           return s;
@@ -226,6 +232,7 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
         await alert(ctx, `made a new secret for the client ${client.id}`);
       } else {
         const n = await transaction(app.sql, async (tx) => {
+          await lockClient(tx, service, client);
           const retired = await retireOldClientSecrets(tx, client.id);
           await audit(tx, { actor: ACTOR, action: "client.secret_retire", detail: { client: client.id, retired } });
           return retired;
