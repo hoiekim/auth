@@ -417,7 +417,7 @@ JSON under `/v1`. The account and admin pages call the same handlers. Callers ar
 | `POST /v1/me/password` | `{current, new}`; ends the user's other sessions |
 | `POST` / `DELETE /v1/me/totp` | Enroll (returns an `otpauth://` URI, confirmed with a code) or remove |
 | `POST /v1/me/recovery-codes` | Regenerate 10 codes, shown once |
-| `GET` / `POST` / `DELETE /v1/me/passkeys[/{id}]` | WebAuthn registration and removal |
+| `GET` / `POST` / `DELETE /v1/me/passkeys[/{id}]` | WebAuthn registration and removal. Starting a registration may name `attachment`: `platform` for the device's own authenticator, or `cross-platform` for a security key or another device; without it the browser offers both (§9.1) |
 | `GET` / `DELETE /v1/me/sessions[/{id}]` | Devices, including each public client's refresh-token family (§7.3); sign one out, or every one with `DELETE /v1/me/sessions` |
 | `GET` / `POST` / `DELETE /v1/me/app-passwords[/{id}]` | `{name, service: "mailbox", scopes: ["imap","smtp"]}`; the secret is shown once, and listed afterwards by name only |
 | `GET` / `POST` / `DELETE /v1/me/api-keys[/{id}]` | `{name, service, scopes, expires_at?}`; the secret is shown once |
@@ -735,6 +735,7 @@ CREATE UNLOGGED TABLE throttle (                      -- shared across every cop
 **Passkeys (WebAuthn)**
 - The RP ID is the issuer's host (`auth.example.com`), not its parent domain. A compromised sibling subdomain can then never ask for an assertion.
 - `userVerification: "required"`, so a passkey is two factors by itself and skips TOTP. Attestation is `none`.
+- Adding one, the account page offers the device's own authenticator by name (Face ID or Touch ID, an Android phone's fingerprint, face or screen lock, Windows Hello) when the browser says it has one, and a security key or another device beside it. The choice becomes `authenticatorAttachment` and only picks the browser's prompt: under attestation `none` nothing proves which kind made a key, so auth neither records nor checks it.
 - Verification is auth's own (`src/webauthn.ts`), with signatures checked by `node:crypto`, as JWTs are. Attestation being `none`, the attestation statement is never read, and no certificate is parsed.
   - Keys are EdDSA (Ed25519), ES256 (P-256) or RS256 (2048 to 4096 bits, exponent 65537). A key is refused at registration unless its COSE key type, curve and size match its algorithm, and `node:crypto` accepts it.
   - CBOR is read by a decoder for the subset WebAuthn uses: definite lengths, no tags or floats, no duplicate map keys. The CBOR a user sends is read only when a signed-in user adds a passkey. A sign-in reads JSON and the fixed-length start of the authenticator data, and checks the signature against the key auth stored.

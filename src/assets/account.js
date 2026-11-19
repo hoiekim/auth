@@ -353,7 +353,12 @@
         return;
       }
       if (out && !(e instanceof ApiError && e.status === 401)) {
-        var msg = e && e.name === "NotAllowedError" ? "The passkey prompt was cancelled or timed out." : (e && e.message) || "That didn't work.";
+        var msg =
+          e && e.name === "NotAllowedError"
+            ? "The passkey prompt was cancelled or timed out."
+            : e && e.name === "InvalidStateError"
+              ? "This device or security key already holds a passkey for your account."
+              : (e && e.message) || "That didn't work.";
         say(out, msg);
       }
     } finally {
@@ -532,6 +537,40 @@
         transports: typeof r.getTransports === "function" ? r.getTransports() : undefined,
       },
     };
+  }
+
+  // What unlocks this device's own passkeys, in its maker's words, to name
+  // the button that asks for one. Only a label: whether the device can make
+  // one at all is the browser's answer (platformPasskeys).
+  function deviceUnlock() {
+    var ua = navigator.userAgent || "";
+    // iPadOS asks for pages as a Mac does, but has a touch screen.
+    if (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return "Face ID or Touch ID";
+    if (/Macintosh/.test(ua)) return "Touch ID";
+    if (/Android/.test(ua)) return "fingerprint, face or screen lock";
+    if (/Windows/.test(ua)) return "Windows Hello";
+    return "this device";
+  }
+
+  // Whether this device can keep a passkey itself, unlocked by a biometric or
+  // its screen lock. A browser that doesn't answer within a second counts as
+  // no, so the page never waits on it.
+  function platformPasskeys() {
+    return new Promise(function (resolve) {
+      setTimeout(resolve, 1000, false);
+      try {
+        PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().then(
+          function (ok) {
+            resolve(ok === true);
+          },
+          function () {
+            resolve(false);
+          },
+        );
+      } catch (e) {
+        resolve(false);
+      }
+    });
   }
 
   // ------------------------------------------------------------ profile
@@ -722,8 +761,24 @@
     var list = el("ul", { class: "rows" });
     var supported = typeof window.PublicKeyCredential === "function" && navigator.credentials;
     var name = el("input", { maxlength: "100", placeholder: "e.g. Laptop", value: "" });
-    var add = el("button", { type: "submit", class: "secondary" }, "Add a passkey");
-    var form = el("form", { class: "inline", "data-resume": "passkey-add" }, el("label", {}, "Name", name), add);
+    // The authenticator to ask for, kept in the form so that a change resumed
+    // after signing in again (signInAgain) asks for the same one.
+    var attachment = el("input", { type: "hidden", value: "" });
+    var form = el("form", { class: "inline", "data-resume": "passkey-add" }, el("label", {}, "Name", name), attachment);
+    function choice(value, label, kind) {
+      var onclick = function () {
+        attachment.value = value;
+      };
+      return el("button", { type: "submit", class: kind, value: value, onclick: onclick }, label);
+    }
+    // A device that can keep a passkey itself gets a button for that, named
+    // for what unlocks it, and one for a security key or another device.
+    // Otherwise one button leaves the choice to the browser.
+    if (supported && (await platformPasskeys())) {
+      form.append(choice("platform", "Use " + deviceUnlock()), choice("cross-platform", "Use a security key or another device", "secondary"));
+    } else {
+      form.append(choice("", "Add a passkey", "secondary"));
+    }
     var footer = el("div", { class: "box-footer" }, form);
     if (!supported) footer.hidden = true;
     s.append(
@@ -750,14 +805,31 @@
     }
     form.addEventListener("submit", function (ev) {
       ev.preventDefault();
-      act(add, out, async function () {
-        var begin = await api("POST", "/v1/me/passkeys", {});
-        var cred = await navigator.credentials.create({ publicKey: creationOptions(begin.options) });
-        if (!cred) throw new Error("No passkey was made.");
-        await api("POST", "/v1/me/passkeys", { registration: begin.registration, response: registrationJSON(cred), name: name.value.trim() || "Passkey" });
-        name.value = "";
-        say(out, "Passkey added.", "ok");
-        await load();
+      var buttons = form.querySelectorAll("button");
+      // A resumed change has no submitter: it shows on the button it asked for.
+      var pressed =
+        ev.submitter ||
+        Array.prototype.find.call(buttons, function (b) {
+          return b.value === attachment.value;
+        }) ||
+        buttons[0];
+      act(pressed, out, async function () {
+        buttons.forEach(function (b) {
+          b.disabled = true;
+        });
+        try {
+          var begin = await api("POST", "/v1/me/passkeys", attachment.value ? { attachment: attachment.value } : {});
+          var cred = await navigator.credentials.create({ publicKey: creationOptions(begin.options) });
+          if (!cred) throw new Error("No passkey was made.");
+          await api("POST", "/v1/me/passkeys", { registration: begin.registration, response: registrationJSON(cred), name: name.value.trim() || "Passkey" });
+          name.value = "";
+          say(out, "Passkey added.", "ok");
+          await load();
+        } finally {
+          buttons.forEach(function (b) {
+            b.disabled = false;
+          });
+        }
       });
     });
     await load();

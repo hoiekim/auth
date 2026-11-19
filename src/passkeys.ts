@@ -2,7 +2,7 @@ import type { SQL } from "bun";
 import type { App } from "./app";
 import { fromBase64url, newId } from "./crypto";
 import { once } from "./throttle";
-import { creationOptions, newChallenge, requestOptions, verifyAssertion, verifyRegistration, type RelyingParty } from "./webauthn";
+import { creationOptions, newChallenge, requestOptions, verifyAssertion, verifyRegistration, type Attachment, type RelyingParty } from "./webauthn";
 
 // Passkeys (docs/DESIGN.md §9.1). The RP ID is the issuer's host, not its
 // parent domain, so a sibling subdomain can never ask for an assertion.
@@ -30,7 +30,7 @@ export async function listPasskeys(sql: SQL, userId: string): Promise<PasskeyRow
   return (await sql`SELECT id, name, created_at, last_used_at FROM passkeys WHERE user_id = ${userId} ORDER BY created_at`) as PasskeyRow[];
 }
 
-export async function registrationOptions(app: App, user: { id: string; username: string; name: string }) {
+export async function registrationOptions(app: App, user: { id: string; username: string; name: string }, attachment?: Attachment) {
   const existing: { credential_id: Buffer }[] = await app.sql`SELECT credential_id FROM passkeys WHERE user_id = ${user.id}`;
   const challenge = newChallenge();
   const options = creationOptions(
@@ -38,6 +38,7 @@ export async function registrationOptions(app: App, user: { id: string; username
     challenge,
     { handle: new TextEncoder().encode(user.id), name: user.username, displayName: user.name || user.username },
     existing.map((e) => e.credential_id),
+    attachment,
   );
   const registration = app.crypt.sealValue("passkey-reg", { u: user.id, c: challenge }, CHALLENGE_SECONDS);
   return { options, registration };
