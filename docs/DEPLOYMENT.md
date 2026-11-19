@@ -253,7 +253,7 @@ No app's role can connect to the `auth` database.
 
 ### Resources
 
-Designed for 128 MB of memory and half a CPU. A deployment that expects
+Designed for 64 MB of memory and half a CPU. A deployment that expects
 bursts of sign-ins should measure its peak during one and size the limit to
 it (`docs/DESIGN.md` §10).
 

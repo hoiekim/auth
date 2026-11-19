@@ -75,10 +75,10 @@ const ARGON2 = /^\$argon2(?:id|i|d)\$v=\d+\$m=(\d+),t=(\d+),p=(\d+)\$[A-Za-z0-9+
 const BCRYPT = /^\$2[aby]\$(\d{2})\$[./A-Za-z0-9]{53}$/;
 
 // An imported hash is verified at its own cost until the first sign-in
-// rehashes it, behind the same two hashing slots. More memory than §9.1's
-// 19 MiB would break the 38 MiB budget those slots keep (§10), so such a
+// rehashes it, behind the same hashing slot. More memory than §9.1's
+// 19 MiB would break the 19 MiB budget that slot keeps (§10), so such a
 // hash is refused and its user takes an activation link instead; time is
-// bounded so two attempts can't hold both slots for long.
+// bounded so one attempt can't hold the slot for long.
 export const MAX_ARGON2 = { memoryKiB: 19456, time: 3, parallelism: 4 };
 export const MAX_BCRYPT_COST = 12;
 

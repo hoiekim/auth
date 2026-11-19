@@ -212,6 +212,25 @@ describe("passwords (§9.1)", () => {
     expect(await new Hasher().verify("correct horse battery", bcrypt)).toEqual({ ok: true, rehash: true });
   });
 
+  test("the hasher runs one hash at a time, verifies included", async () => {
+    let running = 0;
+    let peak = 0;
+    const counted = async <T>(result: T): Promise<T> => {
+      running++;
+      peak = Math.max(peak, running);
+      await Bun.sleep(2);
+      running--;
+      return result;
+    };
+    const h = new Hasher({ hash: () => counted("$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA"), verify: () => counted(false) });
+    await Promise.all([
+      ...Array.from({ length: 4 }, (_, i) => h.hash(`password ${i}`)),
+      ...Array.from({ length: 4 }, () => h.verify("anything", null)),
+      ...Array.from({ length: 4 }, () => h.verify("anything", "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA")),
+    ]);
+    expect(peak).toBe(1);
+  });
+
   test("the semaphore runs at most two at once", async () => {
     const sem = new Semaphore(2);
     let running = 0;

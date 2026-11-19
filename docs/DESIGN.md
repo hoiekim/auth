@@ -4,7 +4,7 @@ Status: built through phase 3 (§13), with services registered on the admin page
 
 ## 1. Summary
 
-- **A service, `auth`**: this repo, published as a container image. It runs beside the apps it serves, behind a TLS-terminating proxy, on Postgres in a database of its own. It fits in 128 MB, and two copies can run side by side during a rolling deploy.
+- **A service, `auth`**: this repo, published as a container image. It runs beside the apps it serves, behind a TLS-terminating proxy, on Postgres in a database of its own. It fits in 64 MB, and two copies can run side by side during a rolling deploy.
 - **It owns** people, their credentials (password, TOTP, passkeys, recovery codes, app passwords, API keys), their sign-in sessions, and **which services each person may use, and in what role**.
 - **The apps keep** their own data, the resources inside them (a wiki's workspaces and spaces, a tracker's projects, a mail server's mailboxes) with each person's role on each, their own groups, and their own session cookie.
 - **Authorization is split in two, as behind most identity providers.** auth decides who may use each service and with which role across it; the app decides what that role allows and who holds which role on each of its resources (§6.1).
@@ -60,7 +60,7 @@ These are the kinds of app the design serves, and what each needs from it:
 - Authenticating deploy pipelines and the tools that repair auth (§9.6).
 
 **Constraints**
-- **128 MB and half a CPU per container**, sized so that a memory-pressure alarm at 85% of the limit stays quiet.
+- **64 MB and half a CPU per container**, sized so that a memory-pressure alarm at 85% of the limit stays quiet.
 - **Two copies at once during a rolling deploy**, with no shared memory. Schema changes must be expand/contract.
 - **Assume an attacker can read the database.** It holds hashes and ciphertext only (§9.3).
 - **No Redis, no queue.** Postgres is the only shared state.
@@ -724,7 +724,7 @@ CREATE UNLOGGED TABLE throttle (                      -- shared across every cop
 **Passwords**
 - **Hashing:** argon2id with m = 19 MiB, t = 2, p = 1 (OWASP's minimum), through `Bun.password`.
   - Measured under Bun 1.4.4: **70 ms to hash, 45 ms to verify** on one core.
-  - Bun's default is 64 MiB. Two of those at once would put a 128 MB container at its limit, so set the parameters explicitly and **run at most 2 hashes at a time** (a semaphore). The other requests queue, which caps hashing memory at 38 MiB.
+  - Bun's default is 64 MiB, a 64 MB container's whole limit, so set the parameters explicitly and **run one hash at a time** (a semaphore). The other requests queue, which caps hashing memory at 19 MiB. On half a CPU a second slot would add no throughput: two hashes would share the same half core and each would take twice as long.
 - **Policy** (NIST SP 800-63B): 12–256 characters with no composition rules. Reject passwords found in Have I Been Pwned's k-anonymity range API: only 5 hex characters of the SHA-1 leave the host, and a timeout allows the password. Reject the username and the email as passwords.
 - **Unknown users** cost the same as known ones: verify against a dummy hash.
 
@@ -868,7 +868,7 @@ Every CLI action is audited as `host-cli` and posted to the alert webhook, if on
 | SSO into a second app | two redirects and one back-channel call, about 30–80 ms on the server side |
 
 **Resources**
-- **Memory and CPU:** designed for a 128 MB limit and half a CPU. Bun's resting RSS is typically 40–60 MB, plus at most 38 MiB of argon2id. That is near an 85% alarm line (109 MB). A deployment that expects bursts of sign-ins should measure its peak and raise the limit if needed.
+- **Memory and CPU:** designed for a 64 MB limit and half a CPU. Measured under Bun 1.4.4 at that limit, the memory the kernel can't reclaim is 9–13 MiB at rest and peaked at 33 MiB during bursts of 40 concurrent sign-ins, under an 85% alarm line of 54 MB; one argon2id hash is 19 MiB of that (§9.1). RSS reads higher, 40–60 MB, because it counts the Bun binary's file-backed pages, which the kernel can drop. A deployment that expects bursts of sign-ins should measure its peak and raise the limit if needed.
 - **Database load** is dominated by refreshes, one per active session per 10 minutes. At 50 active sessions that is about 0.1 queries per second. The pool is 5 connections.
 - **Services** are kept in each copy and checked against their revision once per request (§6.2): one single-row read, skipped by health checks and static files. A change reloads them in one query.
 - **The apps** gain a small client and a JWKS of a few hundred bytes. They lose their password hashing, so peak memory falls.
@@ -880,7 +880,7 @@ Every CLI action is audited as `host-cli` and posted to the alert webhook, if on
 - **Image.** CD publishes it from `main` once CI passes and, when the repository names a deploy hook (`DEPLOY_URL`), posts the pushed image's digest to that hook to deploy. A deployment either follows releases through such a hook, so that a merge here is a release to it, or runs the image **pinned by digest** and moves the pin through a change it reviews, so that a push to this repo can't reach it on its own. Either way it runs an image by digest, never by a tag someone could push over.
 - **Runtime.**
   - One container behind a TLS-terminating proxy that sets `X-Real-IP` from the connecting address. No ports published on the host.
-  - 128 MB and half a CPU (§10).
+  - 64 MB and half a CPU (§10).
   - Two copies may run side by side during a deploy, so every piece of state lives in Postgres (§8).
   - A `HEALTHCHECK` on `/healthz`. SIGTERM finishes requests in flight and exits.
 - **Configuration**, all of it the deployment's own: the issuer URL (`ISSUER_URL`), an optional services file (§6.2, `SERVICES_FILE`), `DATABASE_URL`, `AUTH_ENCRYPTION_KEY` and, during a rotation, `AUTH_DECRYPTION_KEYS` (§9.3), the API key prefix (`API_KEY_PREFIX`), the trusted proxies (`TRUSTED_PROXIES`), the SMTP server for its emails (`SMTP_URL`, `EMAIL_FROM`), the audit retention (`AUDIT_RETENTION_DAYS`, default 1 year), whether people may delete their own accounts (U14; `ALLOW_ACCOUNT_DELETION`, default no), and an optional alert webhook (`ALERT_WEBHOOK_URL`). Secrets come from the environment, never from the image or the database (§9.3).
@@ -982,7 +982,7 @@ An app that sends mail through a mail server, or a job that writes to another ap
 4. **Password-only protocols:** users create app passwords, and then a cutover date turns off the old local passwords.
 5. **Clean up:** remove local sign-in code, password columns and flags, one release after nothing has used the fallbacks (audit `login.local` = 0).
 
-**Moving existing users.** For a handful of people, create their accounts with the CLI and let auth email each one an activation link (set a password, enroll TOTP). That is simpler and safer than importing hashes. For more users, import their existing password hashes as a one-off: `Bun.password.verify` reads argon2id and bcrypt PHC strings and re-hashes to argon2id at the first sign-in. Note that bcrypt reads only the first 72 bytes of a password, and some apps truncate before hashing; an import has to verify the way the source app hashed, so a bcrypt hash is verified against the first 72 bytes. An imported hash is verified at its own cost until that first sign-in, behind the same two hashing slots, so only hashes within §9.1's budget are taken: argon2 with at most m = 19 MiB and t = 3, or bcrypt with a cost of at most 12. A user whose hash costs more is imported without one and gets an activation link. `bun cli.ts import users <file>` reads one JSON object per line, `{"username", "email", "name"?, "email_verified"?, "password_hash"?, "access"?: {"<service>": "<role>"}}`. A user without a password hash gets an activation link, as with `user create`.
+**Moving existing users.** For a handful of people, create their accounts with the CLI and let auth email each one an activation link (set a password, enroll TOTP). That is simpler and safer than importing hashes. For more users, import their existing password hashes as a one-off: `Bun.password.verify` reads argon2id and bcrypt PHC strings and re-hashes to argon2id at the first sign-in. Note that bcrypt reads only the first 72 bytes of a password, and some apps truncate before hashing; an import has to verify the way the source app hashed, so a bcrypt hash is verified against the first 72 bytes. An imported hash is verified at its own cost until that first sign-in, behind the same hashing slot, so only hashes within §9.1's budget are taken: argon2 with at most m = 19 MiB and t = 3, or bcrypt with a cost of at most 12. A user whose hash costs more is imported without one and gets an activation link. `bun cli.ts import users <file>` reads one JSON object per line, `{"username", "email", "name"?, "email_verified"?, "password_hash"?, "access"?: {"<service>": "<role>"}}`. A user without a password hash gets an activation link, as with `user create`.
 
 Both imports are all or nothing: every line is checked first, every problem is listed by line number without echoing a hash, and nothing is written unless all pass. An import takes at most 10,000 lines and 8 MB, and an owner holds at most 100 live API keys, as when they create their own. `--dry-run` stops after the checks, and `-` in place of the file reads standard input, so a file on the operator's machine can be piped into `docker exec -i`. Each imported row is audited as `host-cli`.
 
@@ -993,7 +993,7 @@ Both imports are all or nothing: every line is checked first, every problem is l
 | **Forward auth**: the proxy calls auth (`auth_request`) on every request, with a shared cookie on the parent domain | Adds a hop to every request of every app (SSE and assets included), so an auth outage takes down every app. The parent-domain cookie goes to every subdomain, including any served over plain HTTP. It can't serve password-only protocols, native apps or API keys, and it puts auth logic in the proxy's config. It suits only plain web apps behind that proxy. |
 | **A shared session table** that every app reads | Every app's database role gets read access to auth's schema, and every schema change in auth becomes a change to every app. |
 | **Opaque access tokens with introspection on every request** | A network hop per request; low latency rules it out. Kept only for API keys and app passwords, cached. |
-| **Keycloak, Authentik** | Typically several hundred MB of memory, against a 128 MB target; admin models far larger than needed. |
+| **Keycloak, Authentik** | Typically several hundred MB of memory, against a 64 MB target; admin models far larger than needed. |
 | **Zitadel** | An organizations/projects/grants model, which is the IAM-style complexity this design avoids; heavier than the target. |
 | **Ory Kratos + Hydra** | Two services plus a UI to build; more moving parts than the whole of §7. |
 | **Authelia** | Light and good at forward auth, but users live in a file or LDAP with no management API, and it has nothing for app passwords on password-only protocols. |
