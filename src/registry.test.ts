@@ -416,7 +416,7 @@ describe.skipIf(!TEST_DATABASE_URL)("registered services", () => {
     expect(((await res.json()) as any).error).toBe("invalid_grant");
   });
 
-  test("a registered service whose client id the file gives another service is held, and logged", async () => {
+  test("a registered service whose client id the file gives another service is held, logged, and can be deleted, not changed", async () => {
     await db.sql.begin(async (tx) => {
       await tx`INSERT INTO services (name, roles, mfa_roles, signup, created_by) VALUES ('rogue', '{member}', '{}', 'closed', 'test')`;
       await tx`INSERT INTO clients (id, service, type, redirect_uris) VALUES ('wiki', 'rogue', 'confidential', '{https://rogue.example.com/cb}')`;
@@ -428,6 +428,13 @@ describe.skipIf(!TEST_DATABASE_URL)("registered services", () => {
     expect(t.logs).toContain("service rogue is held: the services file gives one of its client ids to another service");
     const current = await t.app.prepare();
     expect(current.services.client("wiki")!.redirectUris).toEqual(["https://wiki.example.com/auth/callback"]);
+    const change = await admin.api(
+      "PUT",
+      "/v1/services/rogue",
+      definition("rogue", { clients: [{ id: "wiki", type: "confidential", redirect_uris: ["https://rogue.example.com/other"] }] }),
+    );
+    expect([change.status, await errorOf(change)]).toEqual([409, "rogue is a held copy; delete it and copy the service again."]);
+    expect(await db.sql`SELECT redirect_uris FROM clients WHERE service = 'rogue'`).toEqual([{ redirect_uris: ["https://rogue.example.com/cb"] }]);
     // Deleting it leaves the file's client its secrets.
     expect((await admin.api("DELETE", "/v1/services/rogue")).status).toBe(204);
     expect((await introspectAs(t, "wiki", t.secrets.wiki!)).status).toBe(200);
