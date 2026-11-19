@@ -465,7 +465,7 @@ describe.skipIf(!TEST_DATABASE_URL)("registered services", () => {
 
   // Holds a lock the way a change to a service does, starts a request, and
   // lets the change finish after the request had time to reach its own lock.
-  async function whileChanging(hold: (tx: any) => Promise<void>, change: (tx: any) => Promise<void>, request: () => Promise<Response>): Promise<Response> {
+  async function whileChanging<T>(hold: (tx: any) => Promise<void>, change: (tx: any) => Promise<void>, request: () => Promise<T>): Promise<T> {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     let held!: () => void;
@@ -485,7 +485,7 @@ describe.skipIf(!TEST_DATABASE_URL)("registered services", () => {
     return pending;
   }
 
-  describe("what the endpoints check under the service's or client's lock", () => {
+  describe("what the endpoints and the CLI check under the service's or client's lock", () => {
     test("a refresh in flight when its public client is removed is refused", async () => {
       await register(definition("relay", { clients: [{ id: "relay-ios", type: "public", redirect_uris: ["com.example.relay:/cb"] }] }));
       const { b } = await signIn(t, "olga", { relay: "member" });
@@ -512,6 +512,24 @@ describe.skipIf(!TEST_DATABASE_URL)("registered services", () => {
         () => exchange(t, "hatch", secret, code, "https://hatch.example.com/auth/callback"),
       );
       expect([res.status, ((await res.json()) as any).error]).toEqual([401, "invalid_client"]);
+    });
+
+    test("the CLI makes or retires no secret for a client removed while it runs", async () => {
+      for (const [command, id] of [
+        ["secret", "anvil"],
+        ["retire-old-secrets", "ember"],
+      ] as const) {
+        await register(definition(id));
+        const out: string[] = [];
+        const code = await whileChanging(
+          (tx) => tx`SELECT id FROM clients WHERE id = ${id} FOR UPDATE`,
+          // The removal has revoked the client's secrets already: one made now would outlive it.
+          (tx) => tx`DELETE FROM clients WHERE id = ${id}`,
+          () => runCli(["client", command, id], { app: t.app, mailer: { send: async () => {} }, out: (l) => out.push(l) }),
+        );
+        expect([command, code, out]).toEqual([command, 1, ["error: Client authentication failed."]]);
+        expect(await db.sql`SELECT 1 FROM client_secrets WHERE client_id = ${id} AND revoked_at IS NULL`).toHaveLength(0);
+      }
     });
 
     test("an invitation sent while the service closes to sign-up is refused", async () => {
