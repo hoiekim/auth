@@ -18,8 +18,8 @@ If you post a review on GitHub, post it from the GitHub account your `gh` CLI is
 
 Read these files in order (from the repo root):
 
-1. **`README.md` § Contributing** — the rules every PR is held to: start from an issue, change the design first, a `## Design alignment` section at the top of the PR body, expand-only migrations, no secret in a log, an error or a response.
-2. **`docs/DESIGN.md`** — the sections the diff touches. §6 the access model, §7 every endpoint, token, event and error, §8 the schema, §9 security. This is the contract; a diff that contradicts it without a merged docs PR behind it is a finding.
+1. **`README.md` § Contributing** — the rules every PR is held to: an issue is optional, the design changes in the same PR as the code or in one merged before it, a `## Design alignment` section at the top of the PR body, expand-only migrations, no secret in a log, an error or a response.
+2. **`docs/DESIGN.md`** — the sections the diff touches. §6 the access model, §7 every endpoint, token, event and error, §8 the schema, §9 security. This is the contract; a diff that contradicts it, without changing it in the same PR or in one merged before, is a finding.
 3. **`docs/DEPLOYMENT.md`** when the diff touches config, the Dockerfile, CI/CD, or anything an operator sets.
 
 If any file is missing or stale, say so in your output — don't invent context.
@@ -148,7 +148,7 @@ For each function the diff changes, find its callers (grep for the symbol) and c
 
 ### H. Design-doc contradiction check
 
-Grep `docs/DESIGN.md` for any concept the diff touches (the access model, an endpoint, a token, a claim, an event, a table, a lifetime, a limit). If the diff decides a question the design has already ruled on, and either contradicts it or adopts an alternative it rejected (§14), that is a finding. The repo's rule is stricter than "update the doc in the same PR": **a change to the access model, an endpoint, a token or claim, an event or the schema goes to `docs/DESIGN.md` in its own PR first**, and the code PR's `## Design alignment` section names the sections it implements. A code PR that changes the contract with no merged docs PR behind it is a MED, and so is a `## Design alignment` section citing a section that does not say what the PR does.
+Grep `docs/DESIGN.md` for any concept the diff touches (the access model, an endpoint, a token, a claim, an event, a table, a lifetime, a limit). If the diff decides a question the design has already ruled on, and either contradicts it or adopts an alternative it rejected (§14), that is a finding. The repo's rule (README § Contributing rule 2): **a change to the access model, an endpoint, a token or claim, an event or the schema updates `docs/DESIGN.md` in the same PR as the code, or in a PR merged before it**, and the PR's `## Design alignment` section names the sections it implements or changes. A PR that changes the contract without `docs/DESIGN.md` saying so, in the PR or already on `main`, is a MED, and so is a `## Design alignment` section citing a section that, with the PR's own doc changes applied, does not say what the PR does. The doc and the code in one PR is not a finding, and neither is a PR with no issue behind it.
 
 ### I. Latency-path + redundant-abstraction discipline
 

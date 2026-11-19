@@ -104,15 +104,16 @@ bun cli.ts help
 
 ## Contributing
 
-1. **Start from an issue.** Each one cites the `docs/DESIGN.md` section it
-   implements.
-2. **Change the design first.** A change to the access model, an endpoint, a
-   token or claim, an event, or the schema goes to `docs/DESIGN.md` in its
-   own PR before any code depends on it.
+1. **An issue is optional.** A PR can stand on its own. An issue, when there
+   is one, cites the `docs/DESIGN.md` section it implements.
+2. **The design changes with the code, never after it.** A change to the
+   access model, an endpoint, a token or claim, an event, or the schema
+   updates `docs/DESIGN.md` in the same PR as the code, or in a PR merged
+   before it.
 3. **Open a PR against `main`.** Start the description with a
-   `## Design alignment` section naming the sections it implements, then a
-   summary. CI (typecheck; tests against Postgres; the image built, started
-   and stopped) must be green.
+   `## Design alignment` section naming the sections it implements or
+   changes, then a summary. CI (typecheck; tests against Postgres; the image
+   built, started and stopped) must be green.
 4. **Migrations are expand-only.** Never edit or drop an applied migration;
    add a new one. During a deploy the previous image runs against the new
    schema.
