@@ -31,6 +31,7 @@ import { failureWait, hit, recordFailure, tooMany } from "./throttle";
 import { transaction, type After } from "./tx";
 import { accountKey } from "./pages/signin";
 import { checkEmail, checkName, checkUsername, deleteUser, findUser, insertUser, setDisabled, userJson, type UserRow } from "./users";
+import { isAttachment } from "./webauthn";
 
 // The management API (docs/DESIGN.md §7.5), JSON under /v1. Callers are a
 // signed-in user (the __Host-auth cookie, plus X-CSRF-Token on changes) or a
@@ -278,7 +279,12 @@ export async function postPasskey({ req, ip, deps: app }: Ctx<App>): Promise<Res
   await requireRecent(app, session);
   const body = await readJson(req);
   if (body.registration === undefined) {
-    return json(200, await registrationOptions(app, { id: session.userId, username: session.username, name: session.name }));
+    // Which authenticator the browser should offer; absent leaves it the choice.
+    const attachment = body.attachment ?? undefined;
+    if (attachment !== undefined && !isAttachment(attachment)) {
+      throw new HttpError(400, "invalid_request", 'attachment is "platform" or "cross-platform".');
+    }
+    return json(200, await registrationOptions(app, { id: session.userId, username: session.username, name: session.name }, attachment));
   }
   const name = typeof body.name === "string" && body.name.trim() ? checkName(body.name).slice(0, 100) : "Passkey";
   const id = await transaction(app.sql, async (tx, after) => {

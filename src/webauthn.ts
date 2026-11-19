@@ -37,11 +37,23 @@ export function newChallenge(): string {
   return base64url(random(32));
 }
 
+// Where the browser should make the passkey: "platform" is the device's own
+// authenticator (Face ID or Touch ID, an Android phone's fingerprint or
+// screen lock, Windows Hello), "cross-platform" a security key or another
+// device. Only a preference for which prompt the browser shows: attestation
+// being "none", nothing in the response proves which kind made the key.
+export type Attachment = "platform" | "cross-platform";
+
+export function isAttachment(v: unknown): v is Attachment {
+  return v === "platform" || v === "cross-platform";
+}
+
 export function creationOptions(
   rp: RelyingParty,
   challenge: string,
   user: { handle: Uint8Array; name: string; displayName: string },
   exclude: Uint8Array[],
+  attachment?: Attachment,
 ) {
   return {
     challenge,
@@ -51,7 +63,12 @@ export function creationOptions(
     timeout: TIMEOUT_MS,
     attestation: "none" as const,
     excludeCredentials: exclude.map((id) => ({ type: "public-key" as const, id: base64url(id) })),
-    authenticatorSelection: { residentKey: "required" as const, requireResidentKey: true, userVerification: "required" as const },
+    authenticatorSelection: {
+      ...(attachment ? { authenticatorAttachment: attachment } : {}),
+      residentKey: "required" as const,
+      requireResidentKey: true,
+      userVerification: "required" as const,
+    },
   };
 }
 

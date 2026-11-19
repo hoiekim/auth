@@ -146,4 +146,32 @@ describe.skipIf(!TEST_DATABASE_URL)("passkeys", () => {
     const { res } = await passkeySignIn(new Browser(t), a, { signWith: new SoftAuthenticator().privateKey });
     expect(res.status).toBe(401);
   });
+
+  test("registration asks for the device's own authenticator, or a security key or another device, when told which", async () => {
+    const { b, id } = await signedIn("ines");
+    const selection = { residentKey: "required", requireResidentKey: true, userVerification: "required" };
+    for (const attachment of ["platform", "cross-platform"]) {
+      const res = await b.api("POST", "/v1/me/passkeys", { attachment });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as any).options.authenticatorSelection).toEqual({ authenticatorAttachment: attachment, ...selection });
+    }
+    // null is the same as leaving it out: the browser offers every kind.
+    const open = (await (await b.api("POST", "/v1/me/passkeys", { attachment: null })).json()) as any;
+    expect(open.options.authenticatorSelection).toEqual(selection);
+    expect("authenticatorAttachment" in open.options.authenticatorSelection).toBe(false);
+
+    for (const attachment of ["Platform", "internal", "", 1, true, ["platform"]]) {
+      const res = await b.api("POST", "/v1/me/passkeys", { attachment });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as any).error).toBe("invalid_request");
+    }
+
+    // The choice only steers the browser's prompt: the key is checked and
+    // stored as any other.
+    const a = new SoftAuthenticator();
+    const { options, registration } = (await (await b.api("POST", "/v1/me/passkeys", { attachment: "platform" })).json()) as any;
+    expect((await b.api("POST", "/v1/me/passkeys", { registration, response: a.create(options, ORIGIN), name: "Phone" })).status).toBe(201);
+    const [row] = await t.app.sql`SELECT credential_id FROM passkeys WHERE user_id = ${id}`;
+    expect(Buffer.from(row.credential_id).equals(a.credentialId)).toBe(true);
+  });
 });

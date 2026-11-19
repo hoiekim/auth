@@ -3,7 +3,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { CborError, decodeCbor, decodeCborPrefix } from "./cbor";
 import { base64url } from "./crypto";
 import { AT, BS, ED, encodeCbor, SoftAuthenticator, UP, UV, type Algorithm, type CborValue } from "./testing/authenticator";
-import { creationOptions, newChallenge, requestOptions, verifyAssertion, verifyRegistration, type RelyingParty } from "./webauthn";
+import { creationOptions, isAttachment, newChallenge, requestOptions, verifyAssertion, verifyRegistration, type RelyingParty } from "./webauthn";
 
 // WebAuthn's relying-party checks (docs/DESIGN.md §9.1) against a software
 // authenticator, and the CBOR they read.
@@ -77,6 +77,23 @@ describe("options", () => {
       excludeCredentials: [{ type: "public-key", id: "AQID" }],
       authenticatorSelection: { residentKey: "required", requireResidentKey: true, userVerification: "required" },
     });
+  });
+
+  test.each(["platform", "cross-platform"] as const)("registration can ask for a %s authenticator, and still for the same credential", (attachment) => {
+    expect(creationOptions(RP, "abc", USER, [], attachment).authenticatorSelection).toEqual({
+      authenticatorAttachment: attachment,
+      residentKey: "required",
+      requireResidentKey: true,
+      userVerification: "required",
+    });
+  });
+
+  test("registration names no attachment unless asked", () => {
+    expect("authenticatorAttachment" in creationOptions(RP, "abc", USER, []).authenticatorSelection).toBe(false);
+  });
+
+  test("an attachment is platform or cross-platform, spelled as WebAuthn spells it", () => {
+    expect(["platform", "cross-platform", "Platform", "internal", "", null, undefined, 1].map(isAttachment)).toEqual([true, true, false, false, false, false, false, false]);
   });
 
   test("sign-in names no credentials, and requires user verification", () => {
