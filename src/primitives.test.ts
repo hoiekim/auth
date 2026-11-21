@@ -259,6 +259,9 @@ describe("passwords (§9.1)", () => {
     expect(asked).toBe(`https://api.pwnedpasswords.com/range/${sha1.slice(0, 5)}`);
     expect(asked).not.toContain(sha1.slice(5));
     expect(await isBreached("another password", fakeFetch)).toBe(false);
+    // A deployment's mirror of the range API is asked the same way.
+    expect(await isBreached("password1234", fakeFetch, 2000, "http://pwned.internal/range")).toBe(true);
+    expect(asked).toBe(`http://pwned.internal/range/${sha1.slice(0, 5)}`);
   });
 
   test("a padding entry (count 0) is not a match, and a timeout allows the password", async () => {

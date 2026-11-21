@@ -3,6 +3,7 @@ import type { EncryptionKey } from "./crypto";
 import { connect } from "./db";
 import { parseFrom, parseSmtpUrl, type SmtpSettings } from "./mail";
 import { parseCidr, type Cidr } from "./net";
+import { BREACHED_PASSWORDS_URL } from "./passwords";
 import { isLoopbackHost, parseServices, Services } from "./services";
 
 // The service's configuration, read from the environment once at start
@@ -27,6 +28,8 @@ export interface Config {
   auditRetentionDays: number;
   allowAccountDeletion: boolean;
   alertWebhookUrl: string | null;
+  // The range API the breached-password check asks (§9.1), without a trailing slash.
+  breachedPasswordsUrl: string;
 }
 
 export class ConfigError extends Error {
@@ -156,6 +159,15 @@ export function loadConfig(env: Record<string, string | undefined>, readFile: Re
     else alertWebhookUrl = rawAlert;
   }
 
+  let breachedPasswordsUrl = BREACHED_PASSWORDS_URL;
+  const rawBreached = value("BREACHED_PASSWORDS_URL");
+  if (rawBreached) {
+    const url = URL.parse(rawBreached);
+    const ok = url !== null && (url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password && !/[?#]/.test(rawBreached);
+    if (!ok) problems.push("BREACHED_PASSWORDS_URL must be an http(s) URL without credentials, a query or a fragment");
+    else breachedPasswordsUrl = rawBreached.replace(/\/+$/, "");
+  }
+
   if (problems.length > 0) throw new ConfigError(problems);
   return {
     port,
@@ -171,6 +183,7 @@ export function loadConfig(env: Record<string, string | undefined>, readFile: Re
     auditRetentionDays,
     allowAccountDeletion,
     alertWebhookUrl,
+    breachedPasswordsUrl,
   };
 }
 

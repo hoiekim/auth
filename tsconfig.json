@@ -15,5 +15,5 @@
     "skipLibCheck": true,
     "types": ["bun"]
   },
-  "include": ["src", "client", "cli.ts"]
+  "include": ["src", "client", "conformance", "cli.ts"]
 }

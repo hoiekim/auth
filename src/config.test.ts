@@ -174,6 +174,15 @@ describe("loadConfig", () => {
     expect(problems({ ...ENV, ALERT_WEBHOOK_URL: "ftp://alerts.example.com" })).toEqual(["ALERT_WEBHOOK_URL must be an http(s) URL"]);
   });
 
+  test("the breached-password check asks the public range API unless the deployment names a mirror", () => {
+    expect(load().breachedPasswordsUrl).toBe("https://api.pwnedpasswords.com/range");
+    expect(load({ BREACHED_PASSWORDS_URL: "http://pwned.internal:8080/range/" }).breachedPasswordsUrl).toBe("http://pwned.internal:8080/range");
+    for (const bad of ["ftp://pwned.internal/range", "pwned.internal/range", "https://user:s3cret-pw@pwned.internal/range", "https://pwned.internal/range?x=1", "https://pwned.internal/range#x"]) {
+      const found = problems({ ...ENV, BREACHED_PASSWORDS_URL: bad });
+      expect(found).toEqual(["BREACHED_PASSWORDS_URL must be an http(s) URL without credentials, a query or a fragment"]);
+    }
+  });
+
   test("an alert webhook problem never echoes the URL, which can carry a token", () => {
     const found = problems({ ...ENV, ALERT_WEBHOOK_URL: "ftp://alerts.example.com/hooks/abc123" });
     expect(found.join("\n")).not.toContain("abc123");

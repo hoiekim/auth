@@ -60,7 +60,7 @@ export function createApp(config: Config, sql: SQL, mailer: Mailer, overrides: A
     drainMail: queue.drain,
     alert: webhookAlert(config.alertWebhookUrl, fetchFn, log),
     hasher: new Hasher(),
-    breached: overrides.breached ?? ((pw) => isBreached(pw, fetchFn)),
+    breached: overrides.breached ?? ((pw) => isBreached(pw, fetchFn, 2000, config.breachedPasswordsUrl)),
     pingDatabase: databasePing(sql, 2000),
     log,
   };

@@ -77,6 +77,7 @@ deployment.
 | `AUDIT_RETENTION_DAYS` | no | `365` | Days of audit log kept |
 | `ALLOW_ACCOUNT_DELETION` | no | `false` | Whether people may delete their own accounts |
 | `ALERT_WEBHOOK_URL` | no | — | Webhook that receives alerts as `{"text": …}` |
+| `BREACHED_PASSWORDS_URL` | no | `https://api.pwnedpasswords.com/range` | The range API the breached-password check asks, for a deployment that mirrors it |
 | `TEST_DATABASE_URL` | tests only | — | A Postgres the database tests use; each test file makes and drops a schema of its own, and they skip without it |
 
 ## Development
