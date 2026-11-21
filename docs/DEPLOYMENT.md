@@ -113,7 +113,7 @@ bearer token.
 | `EMAIL_FROM` | yes | — | The sender of auth's emails: `auth@example.com` or `Example Auth <auth@example.com>` |
 | `AUDIT_RETENTION_DAYS` | no | `365` | Days of audit log kept; lower it under a shorter retention rule |
 | `ALLOW_ACCOUNT_DELETION` | no | `false` | `true` lets people delete their own accounts (U14), for example where a store requires it |
-| `ALERT_WEBHOOK_URL` | no | — | An http(s) URL that receives `{"text": "…"}` on every change an `auth:admin` makes on the admin page or the API, every change to who administers auth, every change made with the break-glass CLI, a held copy of a service taking effect, a reused refresh token, and every event given up (after 24 hours, or at once when its service has no `events_url`) |
+| `ALERT_WEBHOOK_URL` | no | — | An http(s) URL that receives `{"text": "…"}` on every change an `auth:admin` makes through the administration endpoints (`docs/DESIGN.md` §7.5), which the admin page calls; every change to who administers auth; every change the break-glass CLI makes to users, access, secrets, encryption or imported data; a held copy of a service taking effect; a reused refresh token; and every event given up (after 24 hours, or at its next attempt once its service has no `events_url`) |
 
 Secrets (`DATABASE_URL`, `AUTH_ENCRYPTION_KEY` and `AUTH_DECRYPTION_KEYS`, the password in `SMTP_URL`,
 a token in `ALERT_WEBHOOK_URL`) come from the deployment's secret store into
@@ -148,8 +148,9 @@ copy.
 ### First admin and client secrets
 
 Run the CLI inside a running container (`docker exec <container> bun cli.ts
-…`); every change it makes is audited as `host-cli` and alerted, and every
-command but `help` applies pending migrations first.
+…`). Every change it makes to users, access, secrets, encryption or imported
+data is audited as `host-cli` and alerted. Every command but `help` applies
+pending migrations first, which is neither audited nor alerted.
 
 ```sh
 bun cli.ts user create --username alice --email alice@example.com --access auth:admin

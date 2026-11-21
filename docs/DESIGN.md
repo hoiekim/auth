@@ -239,7 +239,7 @@ The fields of a service:
 | `clients` | yes | One or more, each with an `id` unique across every service (`[a-z0-9][a-z0-9._-]{0,63}`), a `type` (`confidential` or `public`), `redirect_uris` and optional `post_logout_redirect_uris`. Both lists hold absolute URIs without a fragment or credentials: `https`, `http` only for a loopback host (`localhost`, `127.0.0.1` or `[::1]`, RFC 8252 §7.3), or, for a public client, a private-use scheme that is a reverse domain name with a dot, such as `com.example.tasks:` (RFC 8252 §7.1). A registered client's `id` and `type` never change (§6.2). |
 | `events_url` | no | Where §7.4's events go: an `http` or `https` URL, on any host, without credentials or a fragment. A service without one relies on the pull (§7.1), and on reading its pending invites (§12.6). |
 
-The file is checked at start, like every other setting: a file that breaks any rule above stops the start, and every problem is listed at once. An unknown field is a problem too. A registration is checked against the same rules and refused with every problem listed. Where the file would leave a field out, it may also write `[]` for a list, or `null` for `default_role` and `events_url`, as `GET /v1/services` answers; the `source` and `secrets` that answer adds are not part of a definition. It is capped so that every copy can hold every service: at most 100 registered services, each with at most 32 roles, 32 scopes of each kind and 5 clients, each client with at most 10 redirect URIs and 10 sign-out URIs, and each URI at most 1024 characters.
+The file is checked at start, like every other setting: a file that breaks any rule above stops the start, and every problem is listed at once. An unknown field is a problem too. A registration is checked against the same rules and refused with every problem listed. Where the file would leave a field out, it may also write `[]` for a list, or `null` for `default_role` and `events_url`, as `GET /v1/services` answers. The `source`, `secrets` and `held` fields that `GET`, `POST` and `PUT` add to their answers are not part of a definition: a body that carries them is refused for its unknown fields. It is capped so that every copy can hold every service: at most 100 registered services, each with at most 32 roles, 32 scopes of each kind and 5 clients, each client with at most 10 redirect URIs and 10 sign-out URIs, and each URI at most 1024 characters.
 
 Rules, in full:
 1. **Default deny.** No access row means no sign-in to the service: auth answers 403 with a page that says "you don't have access to wiki", and issues no code (a `prompt=none` request gets `access_denied`). The one exception is a service with `signup: "open"`, which gives a signed-in user without a row its `default_role`, and writes that row.
@@ -282,7 +282,7 @@ Names and client ids are unique across both. When the file and the database both
 - **A service's name and a client's id and type are fixed.** A confidential client turned public would let anyone holding one of its refresh tokens use them without the secret, so a new type is a new client. A held copy can't give a file client's id another type either. And whatever an id's type becomes, through the file or a later registration, a refresh token is honored only for a client of the type it was issued to.
 - **A role is removed only when no one holds it and no pending invitation offers it,** and `409 conflict` answers otherwise. An access row whose role the service no longer declares would carry a role that `mfa_roles` can't name.
 - **A scope can be removed at any time.** App passwords and keys made earlier keep the scopes they were made with, and introspection reports them; new ones can't take it.
-- **`mfa_roles`, `signup` and `default_role`** apply from the next sign-in or refresh, and redirect URIs from the next request. A code is redeemed only for a redirect URI its client still registers, and removing a URI also drops the unused codes issued for it. Events already queued go to the current `events_url`; once there is none, they are given up and alerted.
+- **`mfa_roles`, `signup` and `default_role`** apply from the next sign-in or refresh, and redirect URIs from the next request. A code is redeemed only for a redirect URI its client still registers, and removing a URI also drops the unused codes issued for it. Events already queued go to the current `events_url`; once there is none, each is given up and alerted at its next attempt.
 - **Removing a client** revokes its secrets and refresh tokens and drops its unused codes, so a client registered later under the same id inherits nothing.
 - **Deleting a service** deletes every access row and invitation for it, revokes its app passwords, API keys, clients' refresh tokens and secrets, and drops the events still queued for it. It sends no event, since the app is gone. A service registered later under the same name starts empty. Deleting a held copy leaves what the file's services use: everything under a name the file declares, and the secrets and tokens of a client id it declares. A copy held only because the file gives one of its client ids to another service still takes its own name's access, invitations and credentials with it.
 - **A registered service with `api_key_scopes`** needs `API_KEY_PREFIX`, as a file's does: it is refused without it, and a copy that starts without the prefix while one is registered stops and says so.
@@ -398,7 +398,7 @@ eyJhbGciOiJFZERTQSIsInR5cCI6InNlY2V2ZW50K2p3dCIsImtpZCI6Ii4uLiJ9…
 | `user.deleted` | `sub` | the above, then delete or anonymise the user's data under the app's own rules |
 | `credential.revoked` | `sub`, `id` | drop the app password or key from the introspection cache; a protocol server closes the connections that used it |
 
-- **Answer `2xx` to acknowledge.** Delivery is at least once, so dedupe on `jti`. Each attempt waits 5 s for the answer and follows no redirect. Auth retries with backoff from 5 s to 1 h, gives up after 24 h (at once, if the service no longer has an `events_url`), and posts to the deployment's alert webhook if one is configured.
+- **Answer `2xx` to acknowledge.** Delivery is at least once, so dedupe on `jti`. Each attempt waits 5 s for the answer and follows no redirect. Auth retries with backoff from 5 s to 1 h, gives up after 24 h (or at the next attempt, if the service no longer has an `events_url`), and posts to the deployment's alert webhook if one is configured.
 - **An app with several copies receives each event on one of them.** The receiving copy writes to its database, then fans out to the other copies, for example with Postgres `NOTIFY auth_events, '<sub or sid>'`. Each copy `LISTEN`s, closes its own connections and drops its own cached introspection answers.
 - **Pull is the safety net.** An event lost for good still takes effect at the next 10-minute recheck, and a lost `invite.accepted` when the app next reads its pending invites (§12.6). Open connections re-check their session row every 60 s.
 
@@ -434,7 +434,7 @@ An app password or API key is made only for a service whose definition declares 
 | `GET /v1/users?q=&after=&limit=` ★ | List or search. A service's client sees only the enabled users with a role on its service, each as `{id, username, name, role}`, and its `q` matches the start of a username or name, or a whole email ignoring case, so it can't list addresses. |
 | `POST /v1/users` | `{username, name, email, kind?}`, then emails an activation link. A bot (`kind: "bot"`) has no email and takes `owner_id`, a person, defaulting to the calling admin. |
 | `GET` / `PATCH` / `DELETE /v1/users/{id}` | `GET` adds the user's second factors and access. `PATCH {name?, email?, disabled?, owner_id?}`: `disabled` `true` disables and `false` enables again; a person's new `email` is unverified, voids the links sent to the old one, and gets the activation link of an account not yet activated (`409` when another account uses it), and the old address gets a notice; a bot's `owner_id` can be changed. A person who owns bots can't be deleted until they're deleted or given another owner (`409`). |
-| `GET` / `POST` / `DELETE /v1/users/{id}/app-passwords[/{id}]`, `…/api-keys[/{id}]` | A bot user's app passwords and API keys (A9), which it can't manage itself; refused for a person (`409`). Making or revoking one needs the recent sign-in a credential change does, emails the bot's owner, and is alerted |
+| `GET` / `POST` / `DELETE /v1/users/{id}/app-passwords[/{id}]`, `…/api-keys[/{id}]` | A bot user's app passwords and API keys (A9), which it can't manage itself; refused for a person (`409`). Making or revoking one needs the recent sign-in a credential change does, and is alerted; making one also emails the bot's owner |
 | `PUT /v1/users/{id}/access/{service}` ★ | `{role}`. Idempotent, so it creates or changes. |
 | `DELETE /v1/users/{id}/access/{service}` ★ | Remove access; `409 conflict` on a service with `signup: "open"` (§6) |
 | `GET /v1/users/{id}/access` ★ | A service client sees only its own row |
@@ -816,8 +816,8 @@ Counters live in the `throttle` table, so every copy shares them and a restart d
 | Sign-in per IP | 30 per 15 minutes |
 | Second factor per session | 5 attempts, then the sign-in starts over. Each failure also counts against the account's sign-in limit above, so starting over doesn't buy more guesses. |
 | A recovery code outside a sign-in (the U6 reset) | the per-account and per-IP sign-in limits above |
-| Reset, invite, sign-up and email-change emails | 3 per hour per address, and 10 per hour per sender: the IP on auth's pages, the signed-in user or the app's client on the API; the answer is the same whether or not the address exists |
-| Account creation (sign-up on an open service, a new account from an invitation, or a first platform sign-in) | 10 per hour per IP |
+| Emails from sign-up, the reset page, a change of one's own email, and invitations | 3 per hour per address, and 10 per hour per sender: the IP on auth's pages, the signed-in user or the app's client on the API; the answer is the same whether or not the address exists. The activation and reset links an `auth:admin` sends aren't counted. |
+| Account creation (sign-up on an open service, a new account from an invitation, or, once platform sign-in is built, a first platform sign-in, §12.3) | 10 per hour per IP |
 | `/oauth/token` per client | 60 per minute |
 | `/oauth/introspect` per client | 600 per minute. Failures are counted per client (1000 an hour) and per end-user address the client names (10 per 15 minutes; the exception above), so a protocol server's brute-force limits stay effective. Past either, the answer is `429`. A back channel through the proxy arrives with the proxy's `X-Real-IP`, the client's own address; that one keys no per-address counter, which would put all the client's users in one bucket. |
 
@@ -862,7 +862,7 @@ bun cli.ts help                      # also: user disable / enable / reset-link,
                                      # encryption reencrypt, import users / api-keys (§12.5, §13), migrate
 ```
 
-Every change made with the CLI is audited as `host-cli` and posted to the alert webhook, if one is configured. Every command but `help` applies pending migrations first, as the server does at start.
+Every change the CLI makes to users, access, client secrets, encryption or imported data is audited as `host-cli` and posted to the alert webhook, if one is configured. Before any command but `help` and `migrate`, the CLI applies pending migrations and rotates a signing key that is due, as the server does at start; `migrate` only applies the migrations. Neither is audited or alerted.
 
 **Backups.** Losing auth's database locks everyone out of every integrated app. Back it up off the host it runs on, encrypted, for example with a nightly `pg_dump` encrypted with `age` to a public key. Restoring it also needs the encryption key it was taken under (`AUTH_ENCRYPTION_KEY`, or an older one after a rotation); keep those offline, separately.
 
@@ -871,7 +871,7 @@ Every change made with the CLI is audited as `host-cli` and posted to the alert 
 | Path | Added latency |
 |---|---|
 | App request with a valid session (most requests) | **0**: the app's own session lookup |
-| App request after `recheck_at` (once per 10 min per session) | about 2–5 ms: one back-channel refresh, a few indexed reads and one write, which keeps the SSO session alive |
+| App request after `recheck_at` (once per 10 min per session) | about 2–5 ms: one back-channel refresh, a few indexed reads and two writes: the client's rate-limit counter, and the SSO session's activity, which keeps it alive |
 | API request with a JWT | about 60 µs: Ed25519 verify (measured, Bun 1.4.4) |
 | API key or app password | about 2–3 ms on a cache miss (introspection), 0 on a hit; 60 s cache |
 | Password sign-in | 45–90 ms of argon2id, on purpose, plus page loads |
