@@ -60,11 +60,8 @@ struct LoginForm<'a> {
 
 fn login_form(app: &App, req: &Request, f: LoginForm) -> Response {
     let (token, cookie) = form_token(req);
-    let signup = if app.services.any_open() {
-        format!(r#"<p class="callout">New here? <a href="/signup?{}">Create an account</a></p>"#, form_encode(&[("return_to", f.return_to)]))
-    } else {
-        String::new()
-    };
+    let signup =
+        if app.services.any_open() { format!(r#"<p class="callout">New here? <a href="/signup?{}">Create an account</a></p>"#, form_encode(&[("return_to", f.return_to)])) } else { String::new() };
     let body = format!(
         r#"
 <h1>Sign in</h1>
@@ -100,9 +97,7 @@ pub async fn get_login(ctx: Ctx) -> Result<Response> {
     let q = ctx.req.query();
     let return_to = local_path(q.get("return_to"));
     let notice = match (q.get("second_factor").filter(|s| !s.is_empty()), q.get("reauth").filter(|s| !s.is_empty()), q.get("notice")) {
-        (Some(service), _, _) => {
-            Some(format!("Your role on {} needs a second factor: sign in with your password and authenticator code, or with a passkey.", utf16_prefix(service, 64)))
-        }
+        (Some(service), _, _) => Some(format!("Your role on {} needs a second factor: sign in with your password and authenticator code, or with a passkey.", utf16_prefix(service, 64))),
         (None, Some(_), _) => Some("Sign in again to continue.".to_string()),
         (None, None, Some("activated")) => Some("Your password is set. Sign in.".to_string()),
         (None, None, Some("reset")) => Some("Your password is changed. Sign in.".to_string()),

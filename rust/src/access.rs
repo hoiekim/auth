@@ -34,9 +34,7 @@ pub fn access_json(a: &AccessRow) -> Value {
 
 /// The role an enabled user holds on a service, from its row only.
 pub async fn role_of(q: Q<'_>, user_id: &str, service: &str) -> Result<Option<String>> {
-    let row = q
-        .first("SELECT a.role FROM access a JOIN users u ON u.id = a.user_id WHERE a.user_id = $1 AND a.service = $2 AND u.disabled_at IS NULL", &[&user_id, &service])
-        .await?;
+    let row = q.first("SELECT a.role FROM access a JOIN users u ON u.id = a.user_id WHERE a.user_id = $1 AND a.service = $2 AND u.disabled_at IS NULL", &[&user_id, &service]).await?;
     match row {
         Some(r) => Ok(Some(r.try_get("role")?)),
         None => Ok(None),

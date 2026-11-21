@@ -158,7 +158,7 @@ pub async fn authorize(ctx: Ctx) -> Result<Response> {
 
     let session = load_session(app, &ctx.req).await?;
     let session = match session {
-        Some(s) if prompt != Some("login") && max_age.map_or(true, |m| s.auth_age <= m) => s,
+        Some(s) if prompt != Some("login") && max_age.is_none_or(|m| s.auth_age <= m) => s,
         _ => {
             if prompt == Some("none") {
                 return fail(state, "login_required", "The user is not signed in.");
@@ -570,37 +570,22 @@ pub async fn introspect(ctx: Ctx) -> Result<Response> {
         }
         return Ok(json_response(200, &json!({ "active": false })));
     };
-    Ok(json_response(
-        200,
-        &json!({ "active": true, "sub": found.user_id, "username": found.username, "scope": found.scopes.join(" "), "role": found.role, "jti": found.id }),
-    ))
+    Ok(json_response(200, &json!({ "active": true, "sub": found.user_id, "username": found.username, "scope": found.scopes.join(" "), "role": found.role, "jti": found.id })))
 }
 
 // ----------------------------------------------------------------- userinfo
 
 pub async fn userinfo(ctx: Ctx) -> Result<Response> {
     let app = &ctx.app;
-    let unauthorized = || {
-        Ok(error_response(
-            401,
-            "invalid_token",
-            "The access token is missing, invalid or expired.",
-            &[("WWW-Authenticate".to_string(), "Bearer error=\"invalid_token\"".to_string())],
-        ))
-    };
+    let unauthorized =
+        || Ok(error_response(401, "invalid_token", "The access token is missing, invalid or expired.", &[("WWW-Authenticate".to_string(), "Bearer error=\"invalid_token\"".to_string())]));
     let header = ctx.req.header("Authorization").unwrap_or_default();
     // `^Bearer ([A-Za-z0-9._-]+)$`
     let Some(token) = js_trim(&header).strip_prefix("Bearer ").filter(|t| !t.is_empty() && t.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))) else {
         return unauthorized();
     };
     app.keys.refresh(false, app.db()).await?;
-    let opts = VerifyOptions {
-        typ: "at+jwt",
-        issuer: &app.config.issuer,
-        audience: Some(app.services.all().iter().map(|s| s.name.clone()).collect()),
-        now_seconds: now_secs(),
-        leeway_seconds: 30,
-    };
+    let opts = VerifyOptions { typ: "at+jwt", issuer: &app.config.issuer, audience: Some(app.services.all().iter().map(|s| s.name.clone()).collect()), now_seconds: now_secs(), leeway_seconds: 30 };
     let Some(claims) = verify_jwt(token, |kid| app.keys.public_key(kid), &opts) else { return unauthorized() };
     let Some(sub) = claims.get("sub").and_then(Value::as_str) else { return unauthorized() };
     let Some(user) = holder(app.db(), sub).await? else { return unauthorized() };

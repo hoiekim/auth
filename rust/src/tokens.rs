@@ -62,12 +62,7 @@ fn row(r: Option<tokio_postgres::Row>) -> Result<Option<TokenRow>> {
 
 /// A live token without using it up: to show the form it leads to.
 pub async fn peek_token(q: Q<'_>, purpose: Purpose, token: Option<&str>) -> Result<Option<TokenRow>> {
-    row(q
-        .first(
-            "SELECT user_id, email FROM one_time_tokens WHERE token_hash = $1 AND purpose = $2 AND used_at IS NULL AND expires_at > now()",
-            &[&token_hash(token), &purpose.as_str()],
-        )
-        .await?)
+    row(q.first("SELECT user_id, email FROM one_time_tokens WHERE token_hash = $1 AND purpose = $2 AND used_at IS NULL AND expires_at > now()", &[&token_hash(token), &purpose.as_str()]).await?)
 }
 
 /// Uses a token up, once, however many requests race for it.

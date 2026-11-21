@@ -196,8 +196,7 @@ impl Services {
     }
 }
 
-const SERVICE_FIELDS: [&str; 10] =
-    ["name", "roles", "mfa_roles", "signup", "default_role", "manages_own_members", "api_key_scopes", "app_password_scopes", "clients", "events_url"];
+const SERVICE_FIELDS: [&str; 10] = ["name", "roles", "mfa_roles", "signup", "default_role", "manages_own_members", "api_key_scopes", "app_password_scopes", "clients", "events_url"];
 const CLIENT_FIELDS: [&str; 4] = ["id", "type", "redirect_uris", "post_logout_redirect_uris"];
 
 fn lower_or_digit(b: u8) -> bool {
@@ -232,10 +231,7 @@ fn is_client_id(s: &str) -> bool {
 // `^[a-z][a-z0-9+.-]*\.[a-z0-9+.-]+:$` over the scheme and its colon.
 fn is_private_scheme(scheme: &str) -> bool {
     let b = scheme.as_bytes();
-    !b.is_empty()
-        && b[0].is_ascii_lowercase()
-        && b.iter().all(|c| lower_or_digit(*c) || b"+.-".contains(c))
-        && (1..b.len().saturating_sub(1)).any(|i| b[i] == b'.')
+    !b.is_empty() && b[0].is_ascii_lowercase() && b.iter().all(|c| lower_or_digit(*c) || b"+.-".contains(c)) && (1..b.len().saturating_sub(1)).any(|i| b[i] == b'.')
 }
 
 pub fn is_loopback_host(hostname: &str) -> bool {
@@ -407,9 +403,9 @@ pub fn parse_service(raw: &Value, source: Source) -> (Service, Vec<String>) {
     let mut events_url = None;
     if !absent(r.get("events_url")) {
         let text = r.get("events_url").and_then(Value::as_str);
-        let ok = text.and_then(|t| Url::parse(t).ok()).is_some_and(|url| {
-            (url.scheme() == "https" || url.scheme() == "http") && url.username().is_empty() && url.password().unwrap_or("").is_empty() && url.fragment().unwrap_or("").is_empty()
-        });
+        let ok = text
+            .and_then(|t| Url::parse(t).ok())
+            .is_some_and(|url| (url.scheme() == "https" || url.scheme() == "http") && url.username().is_empty() && url.password().unwrap_or("").is_empty() && url.fragment().unwrap_or("").is_empty());
         if !ok {
             problems.push("events_url must be an http(s) URL without credentials or a fragment".into());
         } else if registered && utf16_len(text.unwrap()) > LIMIT_URI_LENGTH {

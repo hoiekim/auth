@@ -8,6 +8,9 @@
   if (!root) return;
   var csrfMeta = document.querySelector('meta[name="csrf-token"]');
   var csrf = csrfMeta ? csrfMeta.getAttribute("content") || "" : "";
+  // How the break-glass CLI is called where this page was served from.
+  var cliMeta = document.querySelector('meta[name="cli"]');
+  var cli = (cliMeta && cliMeta.getAttribute("content")) || "bun cli.ts";
   var services = [];
   var me = null;
 
@@ -1072,7 +1075,7 @@
               )
             : null,
           c.type === "confidential" && !held ? el("p", { class: "hint" }, secretsLine(c)) : null,
-          c.type === "confidential" && s.source === "file" ? el("p", { class: "hint" }, "Its secret comes from the CLI: ", el("code", {}, "bun cli.ts client secret " + c.id)) : null,
+          c.type === "confidential" && s.source === "file" ? el("p", { class: "hint" }, "Its secret comes from the CLI: ", el("code", {}, cli + " client secret " + c.id)) : null,
         ),
         actions,
       );

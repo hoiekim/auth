@@ -11,7 +11,7 @@ use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{json, Value};
 
 use crate::crypto::{random, sha256, Encrypter};
-use crate::db::{Q, Tx};
+use crate::db::{Tx, Q};
 use crate::error::{Error, Result};
 use crate::jwt::Signer;
 use crate::util::{b64url, from_b64};

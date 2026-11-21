@@ -20,13 +20,7 @@ pub fn client_config() -> ClientConfig {
     static CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
     let shared = CONFIG.get_or_init(|| {
         let provider = Arc::new(rustls::crypto::ring::default_provider());
-        Arc::new(
-            ClientConfig::builder_with_provider(provider)
-                .with_safe_default_protocol_versions()
-                .expect("the default TLS versions")
-                .with_root_certificates(roots())
-                .with_no_client_auth(),
-        )
+        Arc::new(ClientConfig::builder_with_provider(provider).with_safe_default_protocol_versions().expect("the default TLS versions").with_root_certificates(roots()).with_no_client_auth())
     });
     (**shared).clone()
 }

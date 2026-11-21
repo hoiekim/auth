@@ -180,15 +180,15 @@ mod tests {
     #[test]
     fn everything_else_is_refused() {
         for bad in [
-            &[0x01, 0x02][..],                                              // trailing bytes
-            &[0x5f, 0x41, 0x00, 0xff],                                      // indefinite length
-            &[0xc0, 0x01],                                                  // a tag
-            &[0xf9, 0x00, 0x00],                                            // a float
-            &[0xa2, 0x01, 0x02, 0x01, 0x03],                                // a duplicate key
-            &[0xa1, 0x41, 0x00, 0x01],                                      // a key that is bytes
-            &[0x62, 0xff, 0xfe],                                            // invalid UTF-8
-            &[0x1b, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],        // 2^53
-            &[0x42, 0x00],                                                  // truncated
+            &[0x01, 0x02][..],                                                   // trailing bytes
+            &[0x5f, 0x41, 0x00, 0xff],                                           // indefinite length
+            &[0xc0, 0x01],                                                       // a tag
+            &[0xf9, 0x00, 0x00],                                                 // a float
+            &[0xa2, 0x01, 0x02, 0x01, 0x03],                                     // a duplicate key
+            &[0xa1, 0x41, 0x00, 0x01],                                           // a key that is bytes
+            &[0x62, 0xff, 0xfe],                                                 // invalid UTF-8
+            &[0x1b, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],             // 2^53
+            &[0x42, 0x00],                                                       // truncated
             &[0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0x00], // too deep
         ] {
             assert!(decode_cbor(bad).is_err(), "{bad:?}");

@@ -162,7 +162,8 @@ fn hash_problem(hash: &str) -> Option<String> {
         });
     }
     if let Some(cost) = bcrypt_cost(hash) {
-        return (cost > MAX_BCRYPT_COST).then(|| format!("password_hash costs more than this service verifies (bcrypt cost at most {MAX_BCRYPT_COST}); leave it out and the user gets an activation link"));
+        return (cost > MAX_BCRYPT_COST)
+            .then(|| format!("password_hash costs more than this service verifies (bcrypt cost at most {MAX_BCRYPT_COST}); leave it out and the user gets an activation link"));
     }
     Some("password_hash is not an argon2 or bcrypt PHC string".into())
 }
@@ -411,10 +412,7 @@ pub async fn import_api_keys(app: &App, service: &Service, text: &str, dry_run: 
             continue;
         }
         let by = if is_id(&k.owner) { "u.id" } else { "u.username" };
-        let row = app
-            .db()
-            .first(&format!("SELECT u.id, a.role FROM users u LEFT JOIN access a ON a.user_id = u.id AND a.service = $1 WHERE {by} = $2"), &[&service.name, &k.owner])
-            .await?;
+        let row = app.db().first(&format!("SELECT u.id, a.role FROM users u LEFT JOIN access a ON a.user_id = u.id AND a.service = $1 WHERE {by} = $2"), &[&service.name, &k.owner]).await?;
         match row {
             None => problems.push(format!("line {}: owner is not a user", k.n)),
             Some(r) if r.try_get::<_, Option<String>>("role")?.is_none() => problems.push(format!("line {}: owner has no role on {}", k.n, service.name)),
@@ -491,8 +489,17 @@ mod tests {
             assert!(is_timestamp(ok), "{ok}");
         }
         for bad in [
-            "2026-11-12T10:00:00", "2026-02-30T10:00:00Z", "2026-02-29T10:00:00Z", "2026-11-12T24:00:00Z", "2026-11-12T10:00:00.1234567Z", "2026-11-12T10:00:00+16:00",
-            "2026-11-12T10:00:00+0100", "2026-11-12 10:00:00Z", "0000-01-01T00:00:00Z", "2026-11-12T10:00:00.Z", "2026-11-12T10:00:00z",
+            "2026-11-12T10:00:00",
+            "2026-02-30T10:00:00Z",
+            "2026-02-29T10:00:00Z",
+            "2026-11-12T24:00:00Z",
+            "2026-11-12T10:00:00.1234567Z",
+            "2026-11-12T10:00:00+16:00",
+            "2026-11-12T10:00:00+0100",
+            "2026-11-12 10:00:00Z",
+            "0000-01-01T00:00:00Z",
+            "2026-11-12T10:00:00.Z",
+            "2026-11-12T10:00:00z",
         ] {
             assert!(!is_timestamp(bad), "{bad}");
         }

@@ -190,9 +190,7 @@ pub fn asset(body: &[u8], content_type: &str) -> Response {
 fn content_type_is(req: &Request, wanted: &str) -> bool {
     let value = req.header("Content-Type").unwrap_or_default();
     let bytes = value.as_bytes();
-    bytes.len() >= wanted.len()
-        && bytes[..wanted.len()].eq_ignore_ascii_case(wanted.as_bytes())
-        && bytes.get(wanted.len()).map_or(true, |c| !(c.is_ascii_alphanumeric() || *c == b'_'))
+    bytes.len() >= wanted.len() && bytes[..wanted.len()].eq_ignore_ascii_case(wanted.as_bytes()) && bytes.get(wanted.len()).is_none_or(|c| !(c.is_ascii_alphanumeric() || *c == b'_'))
 }
 
 pub fn read_json(req: &Request) -> Result<Map<String, Value>> {

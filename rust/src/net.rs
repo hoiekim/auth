@@ -72,12 +72,12 @@ pub fn in_cidr(ip: &[u8], cidr: &Cidr) -> bool {
         return false;
     }
     let mut bits = cidr.prefix as i64;
-    for i in 0..ip.len() {
+    for (byte, of_range) in ip.iter().zip(cidr.bytes.iter()) {
         if bits <= 0 {
             break;
         }
         let mask: u8 = if bits >= 8 { 0xff } else { 0xffu8 << (8 - bits) };
-        if ip[i] & mask != cidr.bytes[i] & mask {
+        if byte & mask != of_range & mask {
             return false;
         }
         bits -= 8;

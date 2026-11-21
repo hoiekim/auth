@@ -49,7 +49,7 @@ impl ServiceRegistry {
             let (fresh_revision, services) = self.load(q).await?;
             let services = Arc::new(services);
             let mut loaded = self.loaded.lock().unwrap();
-            if loaded.as_ref().map_or(true, |(r, _)| *r < fresh_revision) {
+            if loaded.as_ref().is_none_or(|(r, _)| *r < fresh_revision) {
                 *loaded = Some((fresh_revision, services.clone()));
             }
             if fresh_revision >= revision {
@@ -223,9 +223,7 @@ pub async fn replace_service(q: Q<'_>, current: &Services, s: &Service) -> Resul
         .await?
         .ok_or_else(|| http(404, "not_found", format!("There is no registered service \"{}\".", s.name)))?;
     // Locked, so no token request for one of them is half done (lock_client).
-    let old_rows = q
-        .query("SELECT id, type, redirect_uris, post_logout_redirect_uris FROM clients WHERE service = $1 ORDER BY created_at, id FOR UPDATE", &[&s.name])
-        .await?;
+    let old_rows = q.query("SELECT id, type, redirect_uris, post_logout_redirect_uris FROM clients WHERE service = $1 ORDER BY created_at, id FOR UPDATE", &[&s.name]).await?;
     let mut old_clients: Vec<Client> = Vec::new();
     for r in &old_rows {
         old_clients.push(Client {

@@ -120,13 +120,7 @@ async fn deliver_one(app: &App, row: Due) -> Result<()> {
     let url = app.services.get(&row.service).and_then(|s| s.events_url.clone());
     let mut delivered = false;
     if let Some(url) = &url {
-        let request = app
-            .http
-            .post(url)
-            .header("Content-Type", "application/secevent+jwt")
-            .header("Accept", "application/json")
-            .body(row.token.clone())
-            .timeout(Duration::from_millis(5000));
+        let request = app.http.post(url).header("Content-Type", "application/secevent+jwt").header("Accept", "application/json").body(row.token.clone()).timeout(Duration::from_millis(5000));
         if let Ok(res) = request.send().await {
             delivered = res.status().is_success();
         }

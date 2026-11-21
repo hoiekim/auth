@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { roleOf } from "../access";
 import type { App } from "../app";
+import { CLI } from "../cli-name";
 import { asset, errorResponse, redirect } from "../http";
 import type { Ctx } from "../server";
 import { AUTH_SERVICE } from "../services";
@@ -86,6 +87,6 @@ export async function adminPage({ req, deps: app }: Ctx<App>): Promise<Response>
   return page(app, "Admin", body, {
     header: header(app, "admin"),
     scripts: ["admin.js"],
-    meta: { "csrf-token": csrfToken(app, session) },
+    meta: { "csrf-token": csrfToken(app, session), cli: CLI },
   });
 }

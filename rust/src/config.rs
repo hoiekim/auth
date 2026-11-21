@@ -180,9 +180,8 @@ pub fn load_config(env: &dyn Fn(&str) -> Option<String>, read_file: &dyn Fn(&str
     let mut breached_passwords_url = BREACHED_PASSWORDS_URL.to_string();
     let raw_breached = value("BREACHED_PASSWORDS_URL");
     if !raw_breached.is_empty() {
-        let ok = Url::parse(&raw_breached).is_ok_and(|url| {
-            (url.scheme() == "https" || url.scheme() == "http") && url.username().is_empty() && url.password().unwrap_or("").is_empty()
-        }) && !raw_breached.contains(['?', '#']);
+        let ok = Url::parse(&raw_breached).is_ok_and(|url| (url.scheme() == "https" || url.scheme() == "http") && url.username().is_empty() && url.password().unwrap_or("").is_empty())
+            && !raw_breached.contains(['?', '#']);
         if ok {
             breached_passwords_url = raw_breached.trim_end_matches('/').to_string();
         } else {

@@ -54,7 +54,7 @@ impl Error {
     pub fn is_unique_violation(&self, constraint: Option<&str>) -> bool {
         let Error::Db(e) = self else { return false };
         let Some(db) = e.as_db_error() else { return false };
-        db.code() == &tokio_postgres::error::SqlState::UNIQUE_VIOLATION && constraint.map_or(true, |c| db.constraint() == Some(c))
+        db.code() == &tokio_postgres::error::SqlState::UNIQUE_VIOLATION && constraint.is_none_or(|c| db.constraint() == Some(c))
     }
 
     pub fn http_status(&self) -> Option<u16> {

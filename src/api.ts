@@ -1,6 +1,7 @@
 import { accessJson, deleteAccess, putAccess, roleOf, type AccessRow } from "./access";
 import type { App } from "./app";
 import { audit, clientActor } from "./audit";
+import { CLI } from "./cli-name";
 import { authenticateClient, retireOldClientSecrets, rotateClientSecret } from "./clients";
 import { createCredential, credentialJson, listCredentials, revokeCredential, type CredentialKind } from "./credentials";
 import { ID_PATTERN } from "./crypto";
@@ -854,7 +855,7 @@ function confidentialClient(app: App, id: string): { client: Client; service: Se
   if (client.type !== "confidential") throw new HttpError(409, "conflict", "A public client has no secret.");
   const service = app.services.get(client.service)!;
   if (service.source !== "database") {
-    throw new HttpError(409, "conflict", `${id} is a client of the services file: make its secret with the CLI (bun cli.ts client secret ${id}).`);
+    throw new HttpError(409, "conflict", `${id} is a client of the services file: make its secret with the CLI (${CLI} client secret ${id}).`);
   }
   return { client, service };
 }

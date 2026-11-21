@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SoftAuthenticator, UP, type Edits } from "../src/testing/authenticator";
-import { API_CSP, b64u, backChannel, enabled, randomToken, SECURITY_HEADERS, sha256, signInTo, Stack, totp, type Browser, type TestUser } from "./harness";
+import { API_CSP, b64u, backChannel, CLI, enabled, randomToken, SECURITY_HEADERS, sha256, signInTo, Stack, totp, type Browser, type TestUser } from "./harness";
 
 // Signing in at auth's own pages (docs/DESIGN.md §7.1, §9.1, §9.2, §9.4): the
 // page shell and its headers, the static assets, the forms' CSRF defences,
@@ -270,6 +270,8 @@ describe.skipIf(!enabled)("signing in", () => {
       const html = await expectPage(await browser.get("/admin"), 200, "Admin");
       expect(scriptsOf(html)).toEqual(["/assets/admin.js"]);
       expect(expectTag(html, "meta", { name: "csrf-token" }).attrs.content).toBe(stack.crypt.csrf(browser.cookies.get("__Host-auth")!));
+      // The page's script names the CLI as this server calls it.
+      expect(expectTag(html, "meta", { name: "cli" }).attrs.content).toBe(CLI);
       const links = tagsOf(expectTag(html, "nav", {}).inner, "a");
       expect(links.map((a) => a.attrs.href)).toEqual(["/account", "/admin", "/logout"]);
       expect("aria-current" in links[0]!.attrs).toBe(false);

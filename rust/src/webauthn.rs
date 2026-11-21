@@ -228,7 +228,7 @@ fn cose_key(cose: &Cbor) -> Option<PublicKey> {
     let kty = cose.get_int(1).and_then(Cbor::as_int);
     let alg = cose.get_int(3).and_then(Cbor::as_int);
     let crv = cose.get_int(-1).and_then(Cbor::as_int);
-    let bytes = |label: i64, length: Option<usize>| cose.get_int(label).and_then(Cbor::as_bytes).filter(|v| length.map_or(true, |l| v.len() == l));
+    let bytes = |label: i64, length: Option<usize>| cose.get_int(label).and_then(Cbor::as_bytes).filter(|v| length.is_none_or(|l| v.len() == l));
     if alg == Some(EDDSA) && kty == Some(1) && crv == Some(6) {
         return Some(PublicKey::Ed25519(bytes(-2, Some(32))?.to_vec()));
     }

@@ -1,9 +1,11 @@
 //! Account passwords (docs/DESIGN.md §9.1).
 
-use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordVerifier, Version};
+use std::sync::Mutex;
+
+use argon2::{Algorithm, Argon2, Block, Params, PasswordHash, Version};
 use tokio::sync::{OnceCell, Semaphore};
 
-use crate::crypto::random;
+use crate::crypto::{bytes_equal, random};
 use crate::util::{b64_nopad, char_count};
 
 // OWASP's minimum for argon2id: m = 19 MiB, t = 2, p = 1.
@@ -11,12 +13,53 @@ const MEMORY_KIB: u32 = 19456;
 const TIME: u32 = 2;
 const CURRENT_PREFIX: &str = "$argon2id$v=19$m=19456,t=2,p=1$";
 
+// The 19 MiB an argon2id hash works in, allocated at the first hash and used
+// by one hash at a time from then on. Allocated per hash instead, the
+// allocator would keep one such area for every thread that ever hashed, and
+// a burst of sign-ins would leave several of them resident (§10).
+static WORK_AREA: Mutex<Vec<Block>> = Mutex::new(Vec::new());
+
+fn argon2_into(argon: &Argon2, password: &[u8], salt: &[u8], out: &mut [u8]) -> bool {
+    let blocks = argon.params().block_count();
+    let own = MEMORY_KIB as usize;
+    if blocks > own {
+        // A stored hash that costs more than today's: memory of its own, given back.
+        let mut larger = vec![Block::default(); blocks];
+        return argon.hash_password_into_with_memory(password, salt, out, &mut larger).is_ok();
+    }
+    let mut area = WORK_AREA.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if area.len() < own {
+        area.resize(own, Block::default());
+    }
+    let done = argon.hash_password_into_with_memory(password, salt, out, &mut area[..blocks]).is_ok();
+    // Nothing derived from a password stays behind for the next hash to find.
+    area[..blocks].fill(Block::default());
+    done
+}
+
 fn argon2id(password: &[u8]) -> String {
     let salt = random(32);
     let mut out = [0u8; 32];
     let params = Params::new(MEMORY_KIB, TIME, 1, Some(32)).expect("argon2 parameters");
-    Argon2::new(Algorithm::Argon2id, Version::V0x13, params).hash_password_into(password, &salt, &mut out).expect("argon2id hashes");
+    assert!(argon2_into(&Argon2::new(Algorithm::Argon2id, Version::V0x13, params), password, &salt, &mut out), "argon2id hashes");
     format!("{CURRENT_PREFIX}{}${}", b64_nopad(&salt), b64_nopad(&out))
+}
+
+// An argon2 PHC string, of any variant and parameters: an imported hash is
+// verified as the app that made it hashed.
+fn verify_argon2(password: &[u8], target: &str) -> bool {
+    let Ok(parsed) = PasswordHash::new(target) else { return false };
+    let (Ok(algorithm), Ok(params)) = (Algorithm::try_from(parsed.algorithm), Params::try_from(&parsed)) else { return false };
+    let version = match parsed.version.map(Version::try_from) {
+        Some(Ok(version)) => version,
+        Some(Err(_)) => return false,
+        None => Version::default(),
+    };
+    let (Some(salt), Some(expected)) = (parsed.salt, parsed.hash) else { return false };
+    let mut salt_bytes = [0u8; 64];
+    let Ok(salt) = salt.decode_b64(&mut salt_bytes) else { return false };
+    let mut out = vec![0u8; expected.len()];
+    argon2_into(&Argon2::new(algorithm, version, params), password, salt, &mut out) && bytes_equal(&out, expected.as_bytes())
 }
 
 // A bcrypt hash can only have been imported (§13), and standard bcrypt reads
@@ -26,13 +69,7 @@ fn verify_blocking(password: &str, target: &str) -> bool {
         let bytes = password.as_bytes();
         return bcrypt::verify(&bytes[..bytes.len().min(72)], target).unwrap_or(false);
     }
-    if !target.starts_with("$argon2") {
-        return false;
-    }
-    match PasswordHash::new(target) {
-        Ok(parsed) => Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok(),
-        Err(_) => false,
-    }
+    target.starts_with("$argon2") && verify_argon2(password.as_bytes(), target)
 }
 
 pub struct Verdict {

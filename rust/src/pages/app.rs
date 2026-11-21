@@ -87,6 +87,7 @@ pub async fn admin_page(ctx: Ctx) -> Result<Response> {
     if !session.has_mfa() {
         return Ok(redirect(&format!("/login?{}", form_encode(&[("return_to", "/admin"), ("second_factor", AUTH_SERVICE)])), Extras::default(), 302));
     }
-    let opts = PageOptions { header: Some(header(app, "admin")), scripts: vec!["admin.js"], meta: vec![("csrf-token".to_string(), csrf_token(app, &session))], ..Default::default() };
+    let meta = vec![("csrf-token".to_string(), csrf_token(app, &session)), ("cli".to_string(), crate::cli::NAME.to_string())];
+    let opts = PageOptions { header: Some(header(app, "admin")), scripts: vec!["admin.js"], meta, ..Default::default() };
     Ok(page(app, "Admin", &shell("admin"), opts))
 }

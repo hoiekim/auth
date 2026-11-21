@@ -405,7 +405,7 @@ impl Cli {
             }
 
             _ => {
-                print!("{}\n", help());
+                println!("{}", help());
                 Ok(if matches!(group, Some("help") | None) { 0 } else { 2 })
             }
         }

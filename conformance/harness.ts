@@ -27,14 +27,20 @@ const RUST_BIN = process.env.AUTH_RUST_BIN ?? join(ROOT, "rust", "target", "rele
 // How each backend's break-glass CLI is called, as its own messages name it.
 export const CLI = BACKEND === "bun" ? "bun cli.ts" : "auth cli";
 
-function serverCommand(): string[] {
-  if (BACKEND === "bun") return ["bun", "--no-install", join(ROOT, "src", "index.ts")];
-  if (!existsSync(RUST_BIN)) throw new Error(`AUTH_BACKEND=rust needs the server built: cargo build --release --manifest-path rust/Cargo.toml (looked for ${RUST_BIN})`);
+// The backend that isn't under test, and whether it can be started too: for
+// the tests that run a copy of each on one database, as a deployment moving
+// from one to the other does.
+export const OTHER: Backend = BACKEND === "bun" ? "rust" : "bun";
+export const bothBackends = existsSync(RUST_BIN);
+
+function serverCommand(backend: Backend = BACKEND): string[] {
+  if (backend === "bun") return ["bun", "--no-install", join(ROOT, "src", "index.ts")];
+  if (!existsSync(RUST_BIN)) throw new Error(`the Rust server isn't built: cargo build --release --manifest-path rust/Cargo.toml (looked for ${RUST_BIN})`);
   return [RUST_BIN];
 }
 
-function cliCommand(args: string[]): string[] {
-  if (BACKEND === "bun") return ["bun", "--no-install", join(ROOT, "cli.ts"), ...args];
+function cliCommand(args: string[], backend: Backend = BACKEND): string[] {
+  if (backend === "bun") return ["bun", "--no-install", join(ROOT, "cli.ts"), ...args];
   return [RUST_BIN, "cli", ...args];
 }
 
@@ -873,8 +879,9 @@ export class Stack {
 
   // Another copy of the server on the same database, as in a rolling deploy
   // or a restart, with its own environment and services file. Not awaited
-  // healthy: call ready() on it, or read its exit.
-  async spawn(opts: { env?: Record<string, string | undefined>; services?: unknown | null } = {}): Promise<ServerProcess> {
+  // healthy: call ready() on it, or read its exit. `backend` starts the other
+  // server in place of the one under test.
+  async spawn(opts: { env?: Record<string, string | undefined>; services?: unknown | null; backend?: Backend } = {}): Promise<ServerProcess> {
     const port = await freePort();
     const env: Record<string, string | undefined> = { ...this.env, PORT: String(port), ...opts.env };
     if (opts.services !== undefined) {
@@ -885,7 +892,7 @@ export class Stack {
         env.SERVICES_FILE = file;
       }
     }
-    const copy = new ServerProcess(serverCommand(), env, this.dir, Number(env.PORT));
+    const copy = new ServerProcess(serverCommand(opts.backend), env, this.dir, Number(env.PORT));
     this.copies.push(copy);
     return copy;
   }
@@ -913,8 +920,8 @@ export class Stack {
   }
 
   // The break-glass CLI, run with the server's environment.
-  async cli(args: string[], opts: { stdin?: string; env?: Record<string, string | undefined> } = {}): Promise<Exit> {
-    return run(cliCommand(args), { ...this.env, ...opts.env }, this.dir, opts.stdin);
+  async cli(args: string[], opts: { stdin?: string; env?: Record<string, string | undefined>; backend?: Backend } = {}): Promise<Exit> {
+    return run(cliCommand(args, opts.backend), { ...this.env, ...opts.env }, this.dir, opts.stdin);
   }
 
   // A file in the stack's own directory, for the CLI to read.
@@ -1064,6 +1071,10 @@ export interface RequestOptions extends RequestInit {
 export class Browser {
   readonly cookies = new Map<string, string>();
   readonly ip: string | null;
+  // The copy this browser reaches: the stack's own server unless a test
+  // points it at another (a ServerProcess's url). The issuer stays the
+  // stack's, as behind one proxy.
+  base: string | null = null;
   // Set by Stack.session.
   sessionId: string | null = null;
   #csrf: { session: string; token: string } | null = null;
@@ -1087,7 +1098,7 @@ export class Browser {
     if (method !== "GET" && origin !== null && !headers.has("Origin")) headers.set("Origin", origin ?? this.stack.issuer);
     const address = ip === undefined ? this.ip : ip;
     if (address !== null && !headers.has("X-Real-IP")) headers.set("X-Real-IP", address);
-    const url = /^https?:/.test(path) ? path : `${this.stack.url}${path}`;
+    const url = /^https?:/.test(path) ? path : `${this.base ?? this.stack.url}${path}`;
     const res = await fetch(url, { ...rest, headers, redirect: "manual" });
     for (const c of res.headers.getSetCookie()) {
       const pair = c.split(";")[0]!;

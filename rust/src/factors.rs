@@ -118,12 +118,8 @@ pub async fn use_recovery_code(q: Q<'_>, user_id: Option<&str>, input: &str) -> 
 /// still fail after the code is checked doesn't spend it.
 pub async fn recovery_code_valid(q: Q<'_>, user_id: Option<&str>, input: &str) -> Result<bool> {
     let code = canonical_recovery_code(input);
-    let rows = q
-        .query(
-            "SELECT 1 FROM recovery_codes WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL",
-            &[&user_id.unwrap_or(""), &sha256(code.as_deref().unwrap_or(input).as_bytes())],
-        )
-        .await?;
+    let rows =
+        q.query("SELECT 1 FROM recovery_codes WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL", &[&user_id.unwrap_or(""), &sha256(code.as_deref().unwrap_or(input).as_bytes())]).await?;
     Ok(code.is_some() && rows.len() == 1)
 }
 

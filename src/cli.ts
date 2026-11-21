@@ -1,6 +1,7 @@
 import { putAccess } from "./access";
 import { createApp, postAlert, type App } from "./app";
 import { audit } from "./audit";
+import { CLI } from "./cli-name";
 import { retireOldClientSecrets, rotateClientSecret } from "./clients";
 import { ConfigError, loadConfig } from "./config";
 import { connect } from "./db";
@@ -24,7 +25,7 @@ import { checkEmail, checkName, checkUsername, findUserByLogin, insertUser, setD
 
 const ACTOR = "host-cli";
 
-const HELP = `usage: bun cli.ts <command>
+const HELP = `usage: ${CLI} <command>
 
   user create --username <name> --email <address> [--name <name>] [--access <service>:<role>]... [--print-link]
   user create --username <name> --bot --owner <username> [--name <name>] [--access <service>:<role>]...
@@ -128,7 +129,7 @@ async function send(ctx: CliContext, msg: MailMessage, username: string): Promis
     ctx.out(`emailed ${msg.to}`);
   } catch (e) {
     const why = e instanceof Error && e.name === "SmtpError" ? e.message : "error";
-    ctx.out(`the email to ${msg.to} failed (${why}); print a link instead with: bun cli.ts user reset-link ${username} --print-link`);
+    ctx.out(`the email to ${msg.to} failed (${why}); print a link instead with: ${CLI} user reset-link ${username} --print-link`);
   }
 }
 

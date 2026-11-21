@@ -586,9 +586,7 @@ async fn create_credential_route(ctx: Ctx, kind: Kind) -> Result<Response> {
     let app = &ctx.app;
     let o = owner(&ctx, kind, true).await?;
     let body = read_json(&ctx.req)?;
-    let Some(service) = body.get("service").and_then(Value::as_str).and_then(|name| app.services.get(name)).cloned() else {
-        bail!(400, "invalid_request", "service must name a service.")
-    };
+    let Some(service) = body.get("service").and_then(Value::as_str).and_then(|name| app.services.get(name)).cloned() else { bail!(400, "invalid_request", "service must name a service.") };
     let tx = app.begin().await?;
     let work = async {
         let new = NewCredential { user_id: &o.user_id, kind, service: &service, scopes: body.get("scopes"), name: body.get("name"), expires_at: body.get("expires_at"), actor: &o.actor, ip: ctx.ip() };
@@ -1052,10 +1050,7 @@ pub async fn list_invites(ctx: Ctx) -> Result<Response> {
     let own = invites_of(&c)?;
     let query = ctx.req.query();
     let service = if matches!(c, Caller::Client { .. }) { own } else { query.get("service").unwrap_or("").to_string() };
-    let rows = app
-        .db()
-        .query(&format!("SELECT {INVITE_COLUMNS} FROM invites WHERE ($1 = '' OR service = $1) AND id > $2 ORDER BY id LIMIT $3"), &[&service, &after, &(limit + 1)])
-        .await?;
+    let rows = app.db().query(&format!("SELECT {INVITE_COLUMNS} FROM invites WHERE ($1 = '' OR service = $1) AND id > $2 ORDER BY id LIMIT $3"), &[&service, &after, &(limit + 1)]).await?;
     let mut list = Vec::new();
     for r in &rows {
         let invite = InviteRow::from_row(r)?;

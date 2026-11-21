@@ -85,10 +85,7 @@ pub fn new_id(prefix: &str) -> String {
 /// `^[a-z]{2,3}_[0-9a-hjkmnp-tv-z]{26}$`
 pub fn is_id(s: &str) -> bool {
     let Some((prefix, rest)) = s.split_once('_') else { return false };
-    (2..=3).contains(&prefix.len())
-        && prefix.bytes().all(|b| b.is_ascii_lowercase())
-        && rest.len() == 26
-        && rest.bytes().all(|b| CROCKFORD.contains(&b))
+    (2..=3).contains(&prefix.len()) && prefix.bytes().all(|b| b.is_ascii_lowercase()) && rest.len() == 26 && rest.bytes().all(|b| CROCKFORD.contains(&b))
 }
 
 /// `^[A-Za-z0-9_-]{43}$`: 32 random bytes as base64url.
@@ -228,9 +225,7 @@ fn seal(key: &[u8], version: u32, plaintext: &[u8], aad: &str) -> Vec<u8> {
     let iv = random(12);
     let sealing = aead::LessSafeKey::new(aead::UnboundKey::new(&aead::AES_256_GCM, key).expect("a 32-byte key"));
     let mut body = plaintext.to_vec();
-    sealing
-        .seal_in_place_append_tag(aead::Nonce::try_assume_unique_for_key(&iv).unwrap(), aead::Aad::from(aad.as_bytes()), &mut body)
-        .expect("AES-GCM seals");
+    sealing.seal_in_place_append_tag(aead::Nonce::try_assume_unique_for_key(&iv).unwrap(), aead::Aad::from(aad.as_bytes()), &mut body).expect("AES-GCM seals");
     let mut out = format!("v{version}:").into_bytes();
     out.extend_from_slice(&iv);
     out.extend_from_slice(&body);

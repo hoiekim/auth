@@ -38,11 +38,7 @@ impl<'a> Audit<'a> {
 }
 
 pub async fn audit(q: Q<'_>, e: Audit<'_>) -> Result<()> {
-    q.execute(
-        "INSERT INTO audit (actor, action, user_id, ip, detail) VALUES ($1, $2, $3, $4::text::inet, $5::text::jsonb)",
-        &[&e.actor, &e.action, &e.user_id, &e.ip, &e.detail.to_string()],
-    )
-    .await?;
+    q.execute("INSERT INTO audit (actor, action, user_id, ip, detail) VALUES ($1, $2, $3, $4::text::inet, $5::text::jsonb)", &[&e.actor, &e.action, &e.user_id, &e.ip, &e.detail.to_string()]).await?;
     Ok(())
 }
 

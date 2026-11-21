@@ -9,7 +9,7 @@ use crate::access::{put_access, Grant};
 use crate::app::App;
 use crate::audit::{audit, Audit};
 use crate::crypto::{new_id, random_token, sha256};
-use crate::db::{Q, Tx};
+use crate::db::{Tx, Q};
 use crate::emails::invite_email;
 use crate::error::{bail, http, Result};
 use crate::events::emit;
@@ -129,9 +129,7 @@ pub async fn accept_invite(tx: &Tx, app: &App, token: Option<&str>, user_id: &st
         .await?;
     let Some(row) = row else { bail!(409, "conflict", "This invitation has expired or was already used.") };
     let invite = InviteRow::from_row(&row)?;
-    let Some(service) = service.filter(|s| s.name == invite.service && s.signup != Signup::Closed && s.has_role(&invite.role)) else {
-        bail!(409, "conflict", "This invitation is no longer valid.")
-    };
+    let Some(service) = service.filter(|s| s.name == invite.service && s.signup != Signup::Closed && s.has_role(&invite.role)) else { bail!(409, "conflict", "This invitation is no longer valid.") };
     put_access(tx, app, &Grant { user_id, service: &service, role: &invite.role, actor: user_id, ip, reason: Some("invite"), never_lower: true }).await?;
     audit(q, Audit::new(Some(user_id), "invite.accept").user(Some(user_id)).ip(ip).detail(json!({ "id": invite.id, "service": service.name }))).await?;
     emit(q, app, &service.name, "invite.accepted", json!({ "invite": invite.id, "sub": user_id })).await?;

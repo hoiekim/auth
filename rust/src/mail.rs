@@ -91,10 +91,7 @@ fn is_atom_char(c: u8) -> bool {
 // `^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`
 fn is_dns_label(label: &str) -> bool {
     let b = label.as_bytes();
-    (1..=63).contains(&b.len())
-        && b[0].is_ascii_alphanumeric()
-        && b[b.len() - 1].is_ascii_alphanumeric()
-        && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'-')
+    (1..=63).contains(&b.len()) && b[0].is_ascii_alphanumeric() && b[b.len() - 1].is_ascii_alphanumeric() && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'-')
 }
 
 /// Deliberately narrower than RFC 5321: no quoted local parts, no address
@@ -190,10 +187,7 @@ fn is_loopback(host: &str) -> bool {
 // `^(?:[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*|\[[0-9A-Fa-f:.]+\])$`
 fn is_helo_name(helo: &str) -> bool {
     let name = helo.split('.').all(|l| !l.is_empty() && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
-    let literal = helo.len() > 2
-        && helo.starts_with('[')
-        && helo.ends_with(']')
-        && helo[1..helo.len() - 1].bytes().all(|b| b.is_ascii_hexdigit() || b == b':' || b == b'.');
+    let literal = helo.len() > 2 && helo.starts_with('[') && helo.ends_with(']') && helo[1..helo.len() - 1].bytes().all(|b| b.is_ascii_hexdigit() || b == b':' || b == b'.');
     name || literal
 }
 
@@ -255,11 +249,7 @@ impl Mailer {
     async fn deliver(&self, to: &str, message: &str) -> Result<(), SmtpError> {
         let s = &self.settings;
         let tcp = TcpStream::connect((s.host.as_str(), s.port)).await.map_err(connection_error)?;
-        let mut session = if s.secure == SmtpSecurity::Implicit {
-            Session::new(Box::new(tls_connect(&s.host, tcp).await?))
-        } else {
-            Session::new(Box::new(tcp))
-        };
+        let mut session = if s.secure == SmtpSecurity::Implicit { Session::new(Box::new(tls_connect(&s.host, tcp).await?)) } else { Session::new(Box::new(tcp)) };
         expect_code(&session.read().await?, &[220], "the greeting")?;
         let mut extensions = ehlo(&mut session, &self.helo).await?;
         if s.secure == SmtpSecurity::StartTls {

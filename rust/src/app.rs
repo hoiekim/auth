@@ -13,7 +13,7 @@ use tokio::sync::Semaphore;
 
 use crate::config::Config;
 use crate::crypto::Encrypter;
-use crate::db::{Pinger, Q, Tx};
+use crate::db::{Pinger, Tx, Q};
 use crate::error::Result;
 use crate::keys::KeyStore;
 use crate::mail::{MailMessage, Mailer};

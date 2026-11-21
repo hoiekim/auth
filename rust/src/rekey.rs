@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use deadpool_postgres::Pool;
 
 use crate::crypto::Encrypter;
-use crate::db::{Q, Tx};
+use crate::db::{Tx, Q};
 use crate::error::Result;
 
 struct Column {
