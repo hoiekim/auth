@@ -16,8 +16,9 @@ limits) is the deployment's own configuration (`docs/DESIGN.md` §2).
   publishes only commits whose CI passed.
 - **Runtime**, on `oven/bun:1.4.4-slim`: installs production dependencies
   only and copies `src` and the break-glass `cli.ts`, all owned by root, and runs as `bun`, which can read
-  the code but not change it. `bun --no-install` makes an import that isn't
-  in `node_modules` fail instead of fetching a package at run time.
+  the code but not change it. The server runs under `bun --no-install`, so
+  an import that isn't in `node_modules` fails instead of fetching a package
+  at run time.
 
 **It runs from source** (`bun src/index.ts`), with no bundle step. Bun's
 bundler replaces `process.env.NODE_ENV` with a constant at build time, so a
@@ -112,7 +113,7 @@ bearer token.
 | `EMAIL_FROM` | yes | — | The sender of auth's emails: `auth@example.com` or `Example Auth <auth@example.com>` |
 | `AUDIT_RETENTION_DAYS` | no | `365` | Days of audit log kept; lower it under a shorter retention rule |
 | `ALLOW_ACCOUNT_DELETION` | no | `false` | `true` lets people delete their own accounts (U14), for example where a store requires it |
-| `ALERT_WEBHOOK_URL` | no | — | An http(s) URL that receives `{"text": "…"}` on every change to who administers auth, every break-glass use, admin resets and disables, a reused refresh token, and events given up after 24 hours |
+| `ALERT_WEBHOOK_URL` | no | — | An http(s) URL that receives `{"text": "…"}` on every change an `auth:admin` makes through the administration endpoints (`docs/DESIGN.md` §7.5), which the admin page calls; every change to who administers auth; every change the break-glass CLI makes to users, access, secrets, encryption or imported data; a held copy of a service taking effect; a reused refresh token; and every event given up (after 24 hours, or at its next attempt once its service has no `events_url`) |
 
 Secrets (`DATABASE_URL`, `AUTH_ENCRYPTION_KEY` and `AUTH_DECRYPTION_KEYS`, the password in `SMTP_URL`,
 a token in `ALERT_WEBHOOK_URL`) come from the deployment's secret store into
@@ -147,7 +148,9 @@ copy.
 ### First admin and client secrets
 
 Run the CLI inside a running container (`docker exec <container> bun cli.ts
-…`); every use is audited as `host-cli` and alerted.
+…`). Every change it makes to users, access, secrets, encryption or imported
+data is audited as `host-cli` and alerted. Every command but `help` applies
+pending migrations first, which is neither audited nor alerted.
 
 ```sh
 bun cli.ts user create --username alice --email alice@example.com --access auth:admin
@@ -203,9 +206,10 @@ docker exec -i <container> bun cli.ts import api-keys --service tasks - < keys.j
 - **Users:** `{"username", "email", "name"?, "email_verified"?, "password_hash"?, "access"?: {"<service>": "<role>"}}`.
   `password_hash` is an argon2 or bcrypt PHC string, which the first sign-in
   rehashes to today's parameters. Until then it is verified at its own cost,
-  so only argon2 with at most `m=19456`, `t=3` and bcrypt with a cost of at
-  most 12 are taken (PHP's and some frameworks' argon2 defaults use more
-  memory); a bcrypt hash is checked against the password's first 72 bytes,
+  so only argon2 (`argon2id`, `argon2i` or `argon2d`) with at most
+  `m=19456`, `t=3` and `p=4`, and bcrypt with a cost of at most 12, are
+  taken (PHP's and some frameworks' argon2 defaults use more memory or
+  parallelism); a bcrypt hash is checked against the password's first 72 bytes,
   as standard bcrypt does. Hashes made some other way (a pre-hash, a
   truncation, another algorithm, or over those costs) can't be imported:
   leave `password_hash` out, and the user gets an activation link by email,
@@ -250,6 +254,15 @@ No app's role can connect to the `auth` database.
 - Apps make their back-channel calls over a private network where the
   deployment has one, or over HTTPS otherwise; browsers reach auth through the
   proxy.
+- Outbound, auth reaches the SMTP server, the alert webhook, each service's
+  `events_url`, and `https://api.pwnedpasswords.com` for the
+  breached-password check (`docs/DESIGN.md` §9.1). That check allows the
+  password when the API can't be reached, so blocking it turns the check
+  off without an error.
+- Emails go out from a queue in memory, two at a time and at most 200
+  waiting. One that fails is logged and not retried, and a stopping copy
+  waits at most 5 seconds for the queue: during an SMTP outage, activation,
+  reset and invitation links are lost and must be sent again.
 
 ### Resources
 

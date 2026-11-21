@@ -230,22 +230,22 @@ The fields of a service:
 | Field | Required | Meaning |
 |---|---|---|
 | `name` | yes | `[a-z][a-z0-9-]{0,62}`, unique; `auth` is reserved. It is the token's `aud`, and a registered service's name never changes. |
-| `roles` | yes | One or more distinct role names, lowest first. |
+| `roles` | yes | One or more distinct role names, lowest first, each `[a-z][a-z0-9_-]{0,31}`. |
 | `mfa_roles` | yes | The roles that require MFA (§9.1), a subset of `roles`. There is no default: every deployment decides, and `[]` is a decision too. |
 | `signup` | yes | How people get access without an admin granting it to them one by one. `closed`: they don't. Access comes only from a grant by an `auth:admin`, or by the service's own client when `manages_own_members` is set, and only to existing accounts; no invitations. `invite`: also anyone holding an invitation (§7.5) creates their own account, or uses an existing one, and gets the invited role. `open`: also anyone may create an account on auth's sign-up page or through a platform sign-in (§12.3), and a signed-in user without an access row gets `default_role` when they sign in to the service. So on an open service a role can be changed but not removed: removal answers `409 conflict`, since the next sign-in would grant `default_role` again, and disabling the user (rule 5) is how to keep them out. |
-| `default_role` | with `signup: "open"` | The role an open sign-up receives; one of `roles`. |
+| `default_role` | with `signup: "open"` | The role an open sign-up receives; one of `roles`. Refused with any other `signup`. |
 | `manages_own_members` | no (`false`) | The service's own client may call the ★ endpoints of §7.5 for this service. |
-| `api_key_scopes`, `app_password_scopes` | no (none) | The scopes API keys and app passwords for this service may carry. A service with neither gets neither kind of credential. |
-| `clients` | yes | One or more, each with an `id` unique across every service, a `type` (`confidential` or `public`), `redirect_uris` and optional `post_logout_redirect_uris`. Redirect URIs are absolute: `https`, `http` only for a loopback host (`localhost`, `127.0.0.1` or `[::1]`, RFC 8252 §7.3), or a private-use scheme for a public client (RFC 8252). A registered client's `id` and `type` never change (§6.2). |
-| `events_url` | no | Where §7.4's events go. A service without one relies on the pull (§7.1), and on reading its pending invites (§12.6). |
+| `api_key_scopes`, `app_password_scopes` | no (none) | The scopes API keys and app passwords for this service may carry, each `[a-z][a-z0-9:._-]{0,63}`. A service with neither gets neither kind of credential. The file leaves an empty list out. |
+| `clients` | yes | One or more, each with an `id` unique across every service (`[a-z0-9][a-z0-9._-]{0,63}`), a `type` (`confidential` or `public`), `redirect_uris` and optional `post_logout_redirect_uris`. Both lists hold absolute URIs without a fragment or credentials: `https`, `http` only for a loopback host (`localhost`, `127.0.0.1` or `[::1]`, RFC 8252 §7.3), or, for a public client, a private-use scheme that is a reverse domain name with a dot, such as `com.example.tasks:` (RFC 8252 §7.1). A registered client's `id` and `type` never change (§6.2). |
+| `events_url` | no | Where §7.4's events go: an `http` or `https` URL, on any host, without credentials or a fragment. A service without one relies on the pull (§7.1), and on reading its pending invites (§12.6). |
 
-The file is checked at start, like every other setting: a file that breaks any rule above stops the start, and every problem is listed at once. A registration is checked against the same rules and refused with every problem listed. It may also write `[]` or `null` for a field the file would leave out, as `GET /v1/services` answers, and it is capped so that every copy can hold every service: at most 100 registered services, each with at most 32 roles, 32 scopes of each kind and 5 clients, each client with at most 10 redirect URIs and 10 sign-out URIs, and each URI at most 1024 characters.
+The file is checked at start, like every other setting: a file that breaks any rule above stops the start, and every problem is listed at once. An unknown field is a problem too. A registration is checked against the same rules and refused with every problem listed. Where the file would leave a field out, it may also write `[]` for a list, or `null` for `default_role` and `events_url`, as `GET /v1/services` answers. The `source`, `secrets` and `held` fields that `GET`, `POST` and `PUT` add to their answers are not part of a definition: a body that carries them is refused for its unknown fields. It is capped so that every copy can hold every service: at most 100 registered services, each with at most 32 roles, 32 scopes of each kind and 5 clients, each client with at most 10 redirect URIs and 10 sign-out URIs, and each URI at most 1024 characters.
 
 Rules, in full:
-1. **Default deny.** No access row means the app refuses with 403 after sign-in, and auth's page says "you don't have access to wiki". The one exception is a service with `signup: "open"`, which gives a signed-in user without a row its `default_role`.
+1. **Default deny.** No access row means no sign-in to the service: auth answers 403 with a page that says "you don't have access to wiki", and issues no code (a `prompt=none` request gets `access_denied`). The one exception is a service with `signup: "open"`, which gives a signed-in user without a row its `default_role`, and writes that row.
 2. **One role per service**, carried in the token as `"role": "…"`. An app checks `role` against its own short list, for example `if (claims.role !== "admin") return 403`.
 3. **A user's power in a service is their role, not scopes.** Scopes exist only on API keys and app passwords, to make them narrower than their owner, never wider: an app authorizes a key or app password by its scopes and its owner's current role together (§12.5).
-4. **Only two kinds of caller change access:** an `auth:admin`, for any service, and a service's own client, for that service only, when the service sets `manages_own_members`.
+4. **Only two kinds of caller change access:** an `auth:admin`, for any service, and a service's own client, for that service only, when the service sets `manages_own_members`. Outside the API, the break-glass CLI on the host grants roles to the users it creates or imports (§9.6, §13).
 5. **Disabling a user** overrides every access row without deleting it. Re-enabling restores the access they had.
 
 There are no policy documents, `Effect`/`Action`/`Resource`/`Condition`, ARNs, deny statements, wildcard actions, role assumption, permission boundaries or inheritance. If a decision needs data the app owns (whose page is this? who may edit this space?), it is the app's decision (§6.1).
@@ -282,9 +282,9 @@ Names and client ids are unique across both. When the file and the database both
 - **A service's name and a client's id and type are fixed.** A confidential client turned public would let anyone holding one of its refresh tokens use them without the secret, so a new type is a new client. A held copy can't give a file client's id another type either. And whatever an id's type becomes, through the file or a later registration, a refresh token is honored only for a client of the type it was issued to.
 - **A role is removed only when no one holds it and no pending invitation offers it,** and `409 conflict` answers otherwise. An access row whose role the service no longer declares would carry a role that `mfa_roles` can't name.
 - **A scope can be removed at any time.** App passwords and keys made earlier keep the scopes they were made with, and introspection reports them; new ones can't take it.
-- **`mfa_roles`, `signup` and `default_role`** apply from the next sign-in or refresh, and redirect URIs from the next request. A code is redeemed only for a redirect URI its client still registers, and removing a URI also drops the unused codes issued for it. Events already queued go to the current `events_url`.
+- **`mfa_roles`, `signup` and `default_role`** apply from the next sign-in or refresh, and redirect URIs from the next request. A code is redeemed only for a redirect URI its client still registers, and removing a URI also drops the unused codes issued for it. Events already queued go to the current `events_url`; once there is none, each is given up and alerted at its next attempt.
 - **Removing a client** revokes its secrets and refresh tokens and drops its unused codes, so a client registered later under the same id inherits nothing.
-- **Deleting a service** deletes every access row and invitation for it, and revokes its app passwords, API keys, clients' refresh tokens and secrets. It sends no event, since the app is gone. A service registered later under the same name starts empty. Deleting a held copy deletes only the copy.
+- **Deleting a service** deletes every access row and invitation for it, revokes its app passwords, API keys, clients' refresh tokens and secrets, and drops the events still queued for it. It sends no event, since the app is gone. A service registered later under the same name starts empty. Deleting a held copy leaves what the file's services use: everything under a name the file declares, and the secrets and tokens of a client id it declares. A copy held only because the file gives one of its client ids to another service still takes its own name's access, invitations and credentials with it.
 - **A registered service with `api_key_scopes`** needs `API_KEY_PREFIX`, as a file's does: it is refused without it, and a copy that starts without the prefix while one is registered stops and says so.
 
 **Moving a service from the file to the admin page, with no outage:** copy it to the database on the admin page, where the copy is held. Then remove it from the file and restart, and the copy is in effect. Access, credentials, invitations and client secrets are keyed by the service's name and client ids, so they carry over and no one signs in again. A held copy can be deleted, not changed. The first copy to start with it in effect audits and alerts that, naming its redirect URIs: an operator who drops a service from the file to retire it learns that its held copy took over, and deletes that too. **To move one the other way**, into reviewed configuration, add it to the file and restart: the file's definition takes over, and the database's is held until it is deleted.
@@ -327,14 +327,14 @@ sequenceDiagram
 
 | Endpoint | Notes |
 |---|---|
-| `GET /.well-known/openid-configuration` | Discovery. Lists only what is below. |
-| `GET /.well-known/jwks.json` | Public keys: current, next and previous. `Cache-Control: max-age=3600`. |
-| `GET /oauth/authorize` | `response_type=code` only. Required: `client_id`, `redirect_uri` (exact string match against the registered list), `state`, `code_challenge` with `S256`, and `nonce` when `scope` has `openid`. Optional: `prompt=none\|login`, `max_age`, `login_hint`. |
-| `POST /oauth/token` | Grants: `authorization_code` and `refresh_token`. Confidential clients use `client_secret_basic`. Public clients use `none` and PKCE. |
-| `POST /oauth/revoke` | RFC 7009. Accepts refresh tokens. |
+| `GET /.well-known/openid-configuration` | Discovery. Lists only what is below. `Cache-Control: max-age=3600`. |
+| `GET /.well-known/jwks.json` | Public keys: the current one, plus the next for the day before it signs and the previous for the day after it stops (§9.3). `Cache-Control: max-age=3600`. |
+| `GET /oauth/authorize` | `response_type=code` only. Required: `client_id`, `redirect_uri` (exact string match against the registered list), `state`, `code_challenge` with `S256`, and `nonce` when `scope` has `openid`. Optional: `prompt=none\|login`, `max_age`, `login_hint`. A parameter given twice is refused. `scope` is read only for `openid`: tokens carry §7.3's claims whatever it asks for. A user without a role on the service gets auth's 403 page (§6 rule 1); one whose role is in `mfa_roles` is asked for the second factor, or to enroll one, first. With `prompt=none` these answer `login_required`, `access_denied` and `interaction_required` at the redirect URI instead. |
+| `POST /oauth/token` | Grants: `authorization_code` and `refresh_token`. Confidential clients use `client_secret_basic`. Public clients use `none` and PKCE. Redeeming a code answers with an ID token; a refresh doesn't, and for a public client it carries the rotated refresh token. |
+| `POST /oauth/revoke` | RFC 7009. Accepts the caller's own refresh tokens, and answers `200` whether or not it knew the token. A confidential client's call revokes that token. A public client's ends the token's whole family and sends `session.ended` (§7.4): the app is signing a device out. |
 | `POST /oauth/introspect` | RFC 7662, client-authenticated. Checks an **API key or app password**, never a JWT (apps verify those locally). Answers `active: true` only when the credential's service is the caller's, the credential is unexpired and unrevoked, and its owner is enabled and holds a role on that service. Removing someone from a service stops their keys and app passwords for it too. An active answer carries `sub`, `username`, `scope`, the owner's current `role` on that service, and `jti`, the credential's id, so a client can drop its cached answer on `credential.revoked`. |
-| `GET /oauth/userinfo` | OIDC userinfo, for clients that expect it. The client in §7.6 doesn't use it. |
-| `GET /logout` | RP-initiated logout. `post_logout_redirect_uri` must be registered for the `client_id`. |
+| `GET` / `POST /oauth/userinfo` | OIDC userinfo, for clients that expect it: `sub`, `username`, `preferred_username` (the same value), `name`, `email` and `email_verified`, for a valid access token of any service, and otherwise `401 invalid_token`. The client in §7.6 doesn't use it. |
+| `GET /logout` | RP-initiated logout. `post_logout_redirect_uri` is optional; when given, it must be registered for the `client_id` that comes with it, and gets `state` back. Without one, auth shows its own "signed out" page. |
 
 Not implemented, on purpose: implicit and hybrid flows, the password grant, `client_credentials` (service-to-service access uses bot users, §12.7), dynamic registration, consent screens (every client is registered by the deployment), request objects, PAR, DPoP and mTLS.
 
@@ -392,13 +392,13 @@ eyJhbGciOiJFZERTQSIsInR5cCI6InNlY2V2ZW50K2p3dCIsImtpZCI6Ii4uLiJ9…
 | Event | Payload | App does |
 |---|---|---|
 | `session.ended` | `sid` | delete sessions with that `sid`; close their connections |
-| `access.changed` | `sub`, `role` (`null` = removed) | update the local role and drop the user's cached introspection answers; on `null`, also delete sessions and close connections |
+| `access.changed` | `sub`, `role` (`null` = removed) | update the local role and drop the user's cached introspection answers; on `null`, also delete sessions and close connections. Sent for every change to the row, however it was made: a grant, an accepted invitation, or a first sign-in to an open service |
 | `user.disabled` | `sub` | delete sessions, close connections, drop the user's cached introspection answers |
 | `invite.accepted` | `invite`, `sub` | give `sub` whatever the app tied to that invitation, such as a role on a space (§12.6) |
 | `user.deleted` | `sub` | the above, then delete or anonymise the user's data under the app's own rules |
 | `credential.revoked` | `sub`, `id` | drop the app password or key from the introspection cache; a protocol server closes the connections that used it |
 
-- **Answer `2xx` to acknowledge.** Delivery is at least once, so dedupe on `jti`. Auth retries with backoff from 5 s to 1 h, gives up after 24 h, and posts to the deployment's alert webhook if one is configured.
+- **Answer `2xx` to acknowledge.** Delivery is at least once, so dedupe on `jti`. Each attempt waits 5 s for the answer and follows no redirect. Auth retries with backoff from 5 s to 1 h, gives up after 24 h (or at the next attempt, if the service no longer has an `events_url`), and posts to the deployment's alert webhook if one is configured.
 - **An app with several copies receives each event on one of them.** The receiving copy writes to its database, then fans out to the other copies, for example with Postgres `NOTIFY auth_events, '<sub or sid>'`. Each copy `LISTEN`s, closes its own connections and drops its own cached introspection answers.
 - **Pull is the safety net.** An event lost for good still takes effect at the next 10-minute recheck, and a lost `invite.accepted` when the app next reads its pending invites (§12.6). Open connections re-check their session row every 60 s.
 
@@ -412,11 +412,11 @@ JSON under `/v1`. The account and admin pages call the same handlers. Callers ar
 
 | Method and path | Purpose |
 |---|---|
-| `GET` / `PATCH /v1/me` | Profile: `name` and `email` (changing email starts verification) |
-| `DELETE /v1/me` | Delete the account, where the deployment allows it (U14) |
-| `POST /v1/me/password` | `{current, new}`; ends the user's other sessions |
-| `POST` / `DELETE /v1/me/totp` | Enroll (returns an `otpauth://` URI, confirmed with a code) or remove |
-| `POST /v1/me/recovery-codes` | Regenerate 10 codes, shown once |
+| `GET` / `PATCH /v1/me` | Profile: `name` and `email` (changing email starts verification). `GET` also shows the address awaiting confirmation (`email_pending`), the second factors enrolled (`mfa`), whether the user is an `auth:admin` (`admin`), and whether the deployment allows account deletion (`account_deletion`) |
+| `DELETE /v1/me` | Delete the account, where the deployment allows it (U14), and otherwise `403`. `409` while the user owns bot users, as below |
+| `POST /v1/me/password` | `{current, new}`, `current` only when the account has a password; ends the user's other sessions. A wrong `current` answers `403 forbidden` and counts against the sign-in limits (§9.4) |
+| `POST` / `DELETE /v1/me/totp` | Enroll in two calls: the first answers `{otpauth_uri, secret, enrollment}`, and `{enrollment, code}` confirms it, steps the session up to two factors, and answers `{recovery_codes}`: 10 new codes when the user had none left, otherwise `null`. Or remove |
+| `POST /v1/me/recovery-codes` | Regenerate 10 codes, shown once, as `{codes}` |
 | `GET` / `POST` / `DELETE /v1/me/passkeys[/{id}]` | WebAuthn registration and removal. Starting a registration may name `attachment`: `platform` for the device's own authenticator, or `cross-platform` for a security key or another device; without it the browser offers both (§9.1) |
 | `GET` / `DELETE /v1/me/sessions[/{id}]` | Devices, including each public client's refresh-token family (§7.3); sign one out, or every one with `DELETE /v1/me/sessions` |
 | `GET` / `POST` / `DELETE /v1/me/app-passwords[/{id}]` | `{name, service: "mailbox", scopes: ["imap","smtp"]}`; the secret is shown once, and listed afterwards by name only |
@@ -425,26 +425,28 @@ JSON under `/v1`. The account and admin pages call the same handlers. Callers ar
 
 Changing password, MFA, passkeys, app passwords or keys, or the recovery email, and deleting the account, need a sign-in in the last 15 minutes, and one that used the second factor when the account has one: otherwise a password alone could enroll a factor of its own or mint a protocol credential. Otherwise the answer is `403 {"error":"reauth_required"}` and the UI asks for the password or passkey again.
 
+An app password or API key is made only for a service whose definition declares that kind's scopes (`400` otherwise) and on which its owner holds a role (`403`), and each owner holds at most 100 live of each kind (`409`).
+
 **Administration** (`auth:admin`; the rows marked ★ also accept a service's own client, for its own service only, when it sets `manages_own_members`)
 
 | Method and path | Purpose |
 |---|---|
 | `GET /v1/users?q=&after=&limit=` ★ | List or search. A service's client sees only the enabled users with a role on its service, each as `{id, username, name, role}`, and its `q` matches the start of a username or name, or a whole email ignoring case, so it can't list addresses. |
 | `POST /v1/users` | `{username, name, email, kind?}`, then emails an activation link. A bot (`kind: "bot"`) has no email and takes `owner_id`, a person, defaulting to the calling admin. |
-| `GET` / `PATCH` / `DELETE /v1/users/{id}` | `PATCH {disabled: true}` disables; a bot's `owner_id` can be changed. A person who owns bots can't be deleted until they're deleted or given another owner (`409`). |
-| `GET` / `POST` / `DELETE /v1/users/{id}/app-passwords[/{id}]`, `…/api-keys[/{id}]` | A bot user's app passwords and API keys (A9), which it can't manage itself; refused for a person (`409`) |
+| `GET` / `PATCH` / `DELETE /v1/users/{id}` | `GET` adds the user's second factors and access. `PATCH {name?, email?, disabled?, owner_id?}`: `disabled` `true` disables and `false` enables again; a person's new `email` is unverified, voids the links sent to the old one, and gets the activation link of an account not yet activated (`409` when another account uses it), and the old address gets a notice; a bot's `owner_id` can be changed. A person who owns bots can't be deleted until they're deleted or given another owner (`409`). |
+| `GET` / `POST` / `DELETE /v1/users/{id}/app-passwords[/{id}]`, `…/api-keys[/{id}]` | A bot user's app passwords and API keys (A9), which it can't manage itself; refused for a person (`409`). Making or revoking one needs the recent sign-in a credential change does, and is alerted; making one also emails the bot's owner |
 | `PUT /v1/users/{id}/access/{service}` ★ | `{role}`. Idempotent, so it creates or changes. |
 | `DELETE /v1/users/{id}/access/{service}` ★ | Remove access; `409 conflict` on a service with `signup: "open"` (§6) |
 | `GET /v1/users/{id}/access` ★ | A service client sees only its own row |
 | `DELETE /v1/users/{id}/sessions` | Sign the user out everywhere |
-| `POST /v1/users/{id}/reset` | `{send_link: true, clear_mfa: bool}` |
-| `POST` / `GET` / `DELETE /v1/invites[/{id}]` ★ | `{email, service, role}`, answering with the invite's `id`; refused for a service with `signup: "closed"`. Accepting gives the invited role, never lowering a role the user already holds, and sends `invite.accepted` (§7.4). `GET` shows `accepted_by` and `accepted_at` once it is accepted. |
+| `POST /v1/users/{id}/reset` | `{send_link?, clear_mfa?}`, at least one `true`. `clear_mfa` removes TOTP, passkeys and recovery codes and signs the user out everywhere; `send_link` emails a reset link, and needs an email address (`409`). `409` for a bot |
+| `POST` / `GET` / `DELETE /v1/invites[/{id}]` ★ | `{email, service, role}`, answering with the invite's `id`; `409` for a service with `signup: "closed"`, and `429` past the email limits (§9.4). Accepting gives the invited role, never lowering a role the user already holds, and sends `invite.accepted` (§7.4). `GET` shows `accepted_by` and `accepted_at` once it is accepted. `GET /v1/invites?service=&after=&limit=` lists every invitation, accepted and expired ones too; a service's client sees only its own service's. |
 | `GET /v1/services` | The services in effect, each with its whole definition, its `source` (`builtin` for `auth`, `file` or `database`) and, for each confidential client, the `created_at` of its live secrets; and the `held` ones (§6.2) |
 | `POST /v1/services` | Register a service. The body is one service in the shape of §6. `409` when the name is registered or a client id is in use; a name the services file declares makes a held copy (§6.2). |
-| `PUT` / `DELETE /v1/services/{name}` | Replace a registered service's definition (the same shape; its name, client ids and client types fixed), or delete it (§6.2). `PUT` answers `409` for a service the file declares or for a held copy. `DELETE` deletes a held copy, and otherwise answers `409` for a service the file declares. |
-| `POST /v1/clients/{id}/secrets` | A new secret for a registered service's confidential client, shown once. The newest earlier one keeps working until the call below, so the app can be moved to the new one (§9.3). `409` for a client of the services file, whose secrets the CLI makes (§6.2). |
+| `PUT` / `DELETE /v1/services/{name}` | Replace a registered service's definition (the same shape, with the same name; clients may be added and removed, but an existing client keeps its id and type), or delete it (§6.2). Both answer `409` for `auth` itself. `PUT` answers `409` for a service the file declares, for a held copy, or when it removes a role still in use (§6.2). `DELETE` deletes a held copy, and otherwise answers `409` for a service the file declares. |
+| `POST /v1/clients/{id}/secrets` | A new secret for a registered service's confidential client, shown once. The newest earlier one keeps working until the call below, so the app can be moved to the new one (§9.3). `409` for a public client, and for a client of the services file, whose secrets the CLI makes (§6.2). |
 | `DELETE /v1/clients/{id}/old-secrets` | Retire every secret of a registered client but the newest |
-| `GET /v1/audit?user=&after=` | Audit log |
+| `GET /v1/audit?user=&after=&limit=` | Audit log, newest first |
 
 Registering, changing or deleting a service, and making or retiring a secret, need a sign-in in the last 15 minutes with a second factor, as a credential change does, and each is alerted (§6.2).
 
@@ -469,20 +471,23 @@ const auth = createAuthClient({
   issuer: process.env.AUTH_ISSUER,             // https://auth.example.com
   backChannelUrl: process.env.AUTH_BACKCHANNEL_URL, // optional: a private-network URL for the same service
   clientId: process.env.AUTH_CLIENT_ID,
-  clientSecret: process.env.AUTH_CLIENT_SECRET,
+  clientSecret: process.env.AUTH_CLIENT_SECRET, // left out for a public client
   redirectUri: process.env.AUTH_REDIRECT_URI,
   audience: process.env.AUTH_AUDIENCE,        // optional: the service name in `aud`, when it differs from the client id
 });
 
-auth.startLogin(req)            // → { redirectUrl, loginCookie }
-auth.finishLogin(req)           // → { claims, idClaims, refreshToken }  (verifies state, nonce, JWT, and auth_time against maxAge or prompt=login)
-auth.refresh(refreshToken)      // → { claims } | throws InvalidGrant | throws Unavailable
-auth.verifyAccessToken(jwt)     // → claims   (JWKS cached 1 h; refetched on unknown kid)
-auth.introspect(secret)         // → { sub, username, role, scopes } | null   (cached by SHA-256: fresh 60 s, served stale up to 10 min only while auth is unreachable)
+// Every call but forget is async.
+auth.startLogin(req, { returnTo?, maxAge?, prompt?, loginHint? })
+                                // → { redirectUrl, loginCookie }
+auth.finishLogin(req)           // → { claims, idClaims, accessToken, refreshToken, returnTo, clearCookie }  (verifies state, nonce, JWT, and auth_time against maxAge or prompt=login; send clearCookie)
+auth.refresh(refreshToken)      // → { claims, accessToken, refreshToken? } | throws InvalidGrant | throws Unavailable  (store a rotated refreshToken: public clients)
+auth.verifyAccessToken(jwt)     // → claims   (JWKS cached 1 h; refetched on unknown kid, at most every 30 s)
+auth.introspect(secret, { ip? })
+                                // → { sub, username, role, scopes, id } | null   (needs the client secret; ip goes as X-Real-IP (§9.4); cached by SHA-256: fresh 60 s, served stale up to 10 min only while auth is unreachable; a 429 reads as null)
 auth.revoke(refreshToken)
 auth.readEvent(body)            // → { type, sub?, sid?, role?, id?, invite?, jti }  (verifies the SET; drops the cached answers it names)
 auth.forget({ sub?, id? })      // drops cached introspection answers, for the copies an event fans out to
-auth.logoutUrl(postLogoutRedirect)
+auth.logoutUrl(postLogoutRedirect?)
 ```
 
 **Routes** a web app adds: `GET /auth/login`, `GET /auth/callback`, `POST /auth/logout` and `POST /auth/events`.
@@ -496,14 +501,14 @@ auth.logoutUrl(postLogoutRedirect)
 ### 7.7 Conventions
 
 - **JSON field names are `snake_case`**, as OAuth's are.
-- **One error shape everywhere, OAuth's:** `{"error": "<code>", "error_description": "<text>"}`. Codes: `invalid_request` 400, `unauthorized` 401, `forbidden` 403, `reauth_required` 403, `not_found` 404, `method_not_allowed` 405 (with `Allow`), `conflict` 409, `rate_limited` 429 (with `Retry-After`), `invalid_grant` and `invalid_client` 400/401 per RFC 6749, `server_error` 500, `temporarily_unavailable` 503.
-- **Lists:** `{"items": […], "next": "<cursor>" | null}`, with `?after=<cursor>&limit=` (at most 100).
+- **One error shape everywhere, OAuth's:** `{"error": "<code>", "error_description": "<text>"}`. Codes: `invalid_request` 400, `unauthorized` 401, `forbidden` 403, `reauth_required` 403, `not_found` 404, `method_not_allowed` 405 (with `Allow`), `conflict` 409, `rate_limited` 429 (with `Retry-After`), `invalid_grant`, `invalid_client` and `unsupported_grant_type` 400/401 per RFC 6749, `invalid_token` 401 per RFC 6750 (userinfo), `server_error` 500, `temporarily_unavailable` 503.
+- **Lists:** `{"items": […], "next": "<cursor>" | null}`. The lists that can grow long (users, invites, audit) take `?after=<cursor>&limit=` (default 50, at most 100); the others answer everything at once, with `next: null`.
 - **IDs** are prefixed by type: `usr_`, `ses_`, `apw_`, `key_`, `inv_`, `evt_`, `pk_` (passkeys). Timestamps are RFC 3339 UTC.
 - **Versioning:** the path is `/v1`. Additive changes don't bump it, and clients ignore unknown fields.
 
 ## 8. Data model
 
-A database and a role of auth's own. Plain SQL migrations (`src/migrations`, recorded in `schema_migrations`) run at boot under `pg_advisory_lock`, each one expand-only, so a copy still running the previous image keeps working while a rolling deploy replaces it.
+A database and a role of auth's own. Plain SQL migrations (`src/migrations`, recorded in `schema_migrations`) run at boot under `pg_advisory_lock`, each one expand-only, so a copy still running the previous image keeps working while a rolling deploy replaces it. The tables below leave out the plain indexes for foreign keys and lookups, which are in the migrations.
 
 ```sql
 CREATE TABLE users (
@@ -533,7 +538,7 @@ CREATE TABLE access (
   user_id    text NOT NULL REFERENCES users ON DELETE CASCADE,
   service    text NOT NULL,                           -- checked against the services (§6.2)
   role       text NOT NULL,
-  granted_by text NOT NULL,                           -- usr_… or cli_<service>
+  granted_by text NOT NULL,                           -- usr_…, cli_<service> or 'host-cli'
   granted_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, service)
 );
@@ -624,7 +629,7 @@ CREATE TABLE client_secrets (                         -- two may be live during 
 );
 
 CREATE TABLE services (                               -- registered on the admin page (§6.2); the file's aren't stored
-  name                text PRIMARY KEY,
+  name                text PRIMARY KEY CHECK (name ~ '^[a-z][a-z0-9-]{0,62}$' AND name <> 'auth'),
   roles               text[] NOT NULL,
   mfa_roles           text[] NOT NULL,
   signup              text NOT NULL CHECK (signup IN ('closed', 'invite', 'open')),
@@ -652,6 +657,7 @@ CREATE TABLE services_revision (                      -- one row, bumped by ever
   id       boolean PRIMARY KEY DEFAULT true CHECK (id),
   revision bigint NOT NULL DEFAULT 0
 );
+INSERT INTO services_revision DEFAULT VALUES;
 
 CREATE TABLE invites (
   id          text PRIMARY KEY,                       -- inv_…
@@ -710,9 +716,10 @@ CREATE UNLOGGED TABLE throttle (                      -- shared across every cop
 );
 ```
 
-**Housekeeping.** An hourly job in one copy at a time, under an advisory lock, does the following:
-- drops expired codes, tokens, sessions and `throttle` rows;
-- drops delivered `outbox` rows after 7 days;
+**Housekeeping.** A job that runs at start and then hourly, in one copy at a time under an advisory lock, rotates the signing keys (§9.3) and does the following:
+- drops expired codes, tokens, sessions and `throttle` rows, and refresh tokens a day after they are revoked;
+- drops invitations never accepted, 30 days after they expire;
+- drops delivered and given-up `outbox` rows after 7 days;
 - drops `audit` rows after the deployment's retention (default 1 year; a deployment under a shorter retention rule sets it lower).
 
 **Size.** For dozens of users the database stays under 10 MB, and audit dominates.
@@ -725,7 +732,7 @@ CREATE UNLOGGED TABLE throttle (                      -- shared across every cop
 - **Hashing:** argon2id with m = 19 MiB, t = 2, p = 1 (OWASP's minimum), through `Bun.password`.
   - Measured under Bun 1.4.4: **70 ms to hash, 45 ms to verify** on one core.
   - Bun's default is 64 MiB, a 64 MB container's whole limit, so set the parameters explicitly and **run one hash at a time** (a semaphore). The other requests queue, which caps hashing memory at 19 MiB. On half a CPU a second slot would add no throughput: two hashes would share the same half core and each would take twice as long.
-- **Policy** (NIST SP 800-63B): 12–256 characters with no composition rules. Reject passwords found in Have I Been Pwned's k-anonymity range API: only 5 hex characters of the SHA-1 leave the host, and a timeout allows the password. Reject the username and the email as passwords.
+- **Policy** (NIST SP 800-63B): 12–256 characters with no composition rules. Reject passwords found in Have I Been Pwned's k-anonymity range API: only 5 hex characters of the SHA-1 leave the host, and a timeout or any other failure to reach it allows the password. Reject the username and the email as passwords.
 - **Unknown users** cost the same as known ones: verify against a dummy hash.
 
 **TOTP**
@@ -756,18 +763,19 @@ CREATE UNLOGGED TABLE throttle (                      -- shared across every cop
 
 ### 9.2 Sessions and cookies
 
-**Auth's cookie:** `__Host-auth`, with `Secure; HttpOnly; SameSite=Lax; Path=/`. Its value is random and only the SHA-256 is stored. It lasts 7 days idle and 30 days absolute, and the id is regenerated at every sign-in and step-up.
+**Auth's cookie:** `__Host-auth`, with `Secure; HttpOnly; SameSite=Lax; Path=/`. Its value is random and only the SHA-256 is stored. It lasts 7 days idle and 30 days absolute; an app's code exchange, or a confidential client's refresh, counts as activity too. Its value is replaced at every sign-in and step-up. A sign-in by the same user keeps the session's id, the `sid` apps hold; anyone else's starts a new session and ends the previous one.
 
 **CSRF on auth's pages** has three layers:
 1. A per-session synchronizer token, in forms and in the `X-CSRF-Token` header.
 2. `Origin` must equal the issuer's origin on every non-GET request. A missing `Origin` is refused. Under `Referrer-Policy: no-referrer` a browser sends `Origin: null` on a same-origin form post, and says so with `Sec-Fetch-Site: same-origin`, which page scripts can't set; that pair counts as the issuer's origin.
 3. `SameSite=Lax`. Sign-in forms get a pre-session CSRF cookie, which blocks login CSRF.
 
-**Headers on every page:**
-- `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'; form-action 'self' <registered redirect origins>; base-uri 'none'`
+**Headers on every response:**
+- `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'; form-action 'self' <registered redirect origins>; base-uri 'none'` on pages, and `default-src 'none'; frame-ancestors 'none'; base-uri 'none'` on everything else
 - `Strict-Transport-Security: max-age=63072000`, without `includeSubDomains`, which would bind every sibling subdomain of the issuer
 - `Referrer-Policy: no-referrer`
-- `Cache-Control: no-store` on anything carrying a token
+- `X-Content-Type-Options: nosniff`
+- `Cache-Control: no-store`, except on discovery and JWKS (an hour, §7.2) and static files (five minutes)
 
 **Open redirects:**
 - `redirect_uri` and `post_logout_redirect_uri` must match a registered value exactly.
@@ -795,7 +803,7 @@ CREATE UNLOGGED TABLE throttle (                      -- shared across every cop
   - auth's role owns only auth's database, and `CONNECT` on it is revoked from `PUBLIC`.
   - `pg_hba.conf` limits auth's role to the network auth runs on.
   - No app's role can connect to auth's database.
-- **Client secrets:** 32 random bytes, SHA-256 stored, two live at once while one is rotated. A registered client's are made on the admin page, a services file client's with the CLI (§6.2); each is shown once and put into the app's environment.
+- **Client secrets:** 32 random bytes, SHA-256 stored, two live at once while one is rotated. A registered client's are made on the admin page, a services file client's with the CLI, which can make either (§6.2); each is shown once and put into the app's environment.
 - **Logging:** the logs never carry a password, code, token, secret, `Authorization` header or cookie. This is enforced by one request logger that prints the method, a route name, the status and the timing, and nothing else (`src/server.ts`).
 
 ### 9.4 Abuse controls
@@ -808,8 +816,8 @@ Counters live in the `throttle` table, so every copy shares them and a restart d
 | Sign-in per IP | 30 per 15 minutes |
 | Second factor per session | 5 attempts, then the sign-in starts over. Each failure also counts against the account's sign-in limit above, so starting over doesn't buy more guesses. |
 | A recovery code outside a sign-in (the U6 reset) | the per-account and per-IP sign-in limits above |
-| Reset, invite and sign-up emails | 3 per hour per address, 10 per hour per IP; the answer is the same whether or not the address exists |
-| Account creation (sign-up on an open service, or a first platform sign-in) | 10 per hour per IP |
+| Emails from sign-up, the reset page, a change of one's own email, and invitations | 3 per hour per address, and 10 per hour per sender: the IP on auth's pages, the signed-in user or the app's client on the API; the answer is the same whether or not the address exists. The activation and reset links an `auth:admin` sends aren't counted. |
+| Account creation (sign-up on an open service, a new account from an invitation, or, once platform sign-in is built, a first platform sign-in, §12.3) | 10 per hour per IP |
 | `/oauth/token` per client | 60 per minute |
 | `/oauth/introspect` per client | 600 per minute. Failures are counted per client (1000 an hour) and per end-user address the client names (10 per 15 minutes; the exception above), so a protocol server's brute-force limits stay effective. Past either, the answer is `429`. A back channel through the proxy arrives with the proxy's `X-Real-IP`, the client's own address; that one keys no per-address counter, which would put all the client's users in one bucket. |
 
@@ -846,14 +854,15 @@ Counters live in the `throttle` table, so every copy shares them and a restart d
 
 ```sh
 bun cli.ts user create --username alice --email alice@example.com --access auth:admin
+bun cli.ts user create --username mailer --bot --owner alice --access mailbox:user   # a bot user (A9)
 bun cli.ts user clear-mfa alice
 bun cli.ts client secret wiki        # prints a new secret once
 bun cli.ts encryption status         # rows per encryption key version (§9.3)
 bun cli.ts help                      # also: user disable / enable / reset-link, client retire-old-secrets,
-                                     # encryption reencrypt, import users / api-keys (§12.5, §13)
+                                     # encryption reencrypt, import users / api-keys (§12.5, §13), migrate
 ```
 
-Every CLI action is audited as `host-cli` and posted to the alert webhook, if one is configured.
+Every change the CLI makes to users, access, client secrets, encryption or imported data is audited as `host-cli` and posted to the alert webhook, if one is configured. Before any command but `help` and `migrate`, the CLI applies pending migrations and rotates a signing key that is due, as the server does at start; `migrate` only applies the migrations. Neither is audited or alerted.
 
 **Backups.** Losing auth's database locks everyone out of every integrated app. Back it up off the host it runs on, encrypted, for example with a nightly `pg_dump` encrypted with `age` to a public key. Restoring it also needs the encryption key it was taken under (`AUTH_ENCRYPTION_KEY`, or an older one after a rotation); keep those offline, separately.
 
@@ -862,7 +871,7 @@ Every CLI action is audited as `host-cli` and posted to the alert webhook, if on
 | Path | Added latency |
 |---|---|
 | App request with a valid session (most requests) | **0**: the app's own session lookup |
-| App request after `recheck_at` (once per 10 min per session) | about 2–5 ms: one back-channel refresh, one indexed read, no write |
+| App request after `recheck_at` (once per 10 min per session) | about 2–5 ms: one back-channel refresh, a few indexed reads and two writes: the client's rate-limit counter, and the SSO session's activity, which keeps it alive |
 | API request with a JWT | about 60 µs: Ed25519 verify (measured, Bun 1.4.4) |
 | API key or app password | about 2–3 ms on a cache miss (introspection), 0 on a hit; 60 s cache |
 | Password sign-in | 45–90 ms of argon2id, on purpose, plus page loads |
@@ -884,7 +893,7 @@ Every CLI action is audited as `host-cli` and posted to the alert webhook, if on
   - 64 MB and half a CPU (§10).
   - Two copies may run side by side during a deploy, so every piece of state lives in Postgres (§8).
   - A `HEALTHCHECK` on `/healthz`. SIGTERM finishes requests in flight and exits.
-- **Configuration**, all of it the deployment's own: the issuer URL (`ISSUER_URL`), an optional services file (§6.2, `SERVICES_FILE`), `DATABASE_URL`, `AUTH_ENCRYPTION_KEY` and, during a rotation, `AUTH_DECRYPTION_KEYS` (§9.3), the API key prefix (`API_KEY_PREFIX`), the trusted proxies (`TRUSTED_PROXIES`), the SMTP server for its emails (`SMTP_URL`, `EMAIL_FROM`), the audit retention (`AUDIT_RETENTION_DAYS`, default 1 year), whether people may delete their own accounts (U14; `ALLOW_ACCOUNT_DELETION`, default no), and an optional alert webhook (`ALERT_WEBHOOK_URL`). Secrets come from the environment, never from the image or the database (§9.3).
+- **Configuration**, all of it the deployment's own: the listen port (`PORT`, default 3000), the issuer URL (`ISSUER_URL`), an optional services file (§6.2, `SERVICES_FILE`), `DATABASE_URL`, `AUTH_ENCRYPTION_KEY` and, during a rotation, `AUTH_DECRYPTION_KEYS` (§9.3), the API key prefix (`API_KEY_PREFIX`), the trusted proxies (`TRUSTED_PROXIES`), the SMTP server for its emails (`SMTP_URL`, `EMAIL_FROM`), the audit retention (`AUDIT_RETENTION_DAYS`, default 1 year), whether people may delete their own accounts (U14; `ALLOW_ACCOUNT_DELETION`, default no), and an optional alert webhook (`ALERT_WEBHOOK_URL`). Secrets come from the environment, never from the image or the database (§9.3).
 - **No app depends on auth to start.** Apps fetch keys lazily and keep serving signed-in users while auth is down (§9.6).
 - **Database.** Postgres 16: a database and a role of auth's own, the database owned by that role, `CONNECT` revoked from `PUBLIC`, and `pg_hba.conf` allowing the role only from the network auth runs on. No app's role can connect to it.
 - **Break-glass CLI.** Runs inside a running container (§9.6).
@@ -899,14 +908,14 @@ Each section covers a kind of app (§2.2). Every kind starts the same way: an `a
 - Use the routes, session row, configuration and cookie of §7.6.
 - Map the token's `role` to what the app allows. Refuse with 403 when there is no role.
 - Re-check access at `recheck_at` (§7.1), and handle events (§7.4).
-- **Long-lived connections** (websockets, SSE): store `sid` on each connection. On `session.ended`, `user.disabled` and `access.changed`, close the matching connections, on every copy of the app (§7.4). Re-check each connection's session row every 60 s.
+- **Long-lived connections** (websockets, SSE): store `sid` on each connection. On `session.ended`, `user.disabled`, `user.deleted` and an `access.changed` that removes the role, close the matching connections, on every copy of the app (§7.4). Re-check each connection's session row every 60 s.
 
 ### 12.2 An app with its own user table
 
 - **Keep the app's user ids.** Add `auth_sub text UNIQUE` to its users table.
 - **Link existing users** with a reviewed mapping, for example a CSV of `local_username,auth_username` that a one-off script writes into `auth_sub`. Accounts that match by verified email can be linked the same way, once someone has checked the list.
 - **Create new users on their first sign-in** from the token's `sub`, `username` and `name`, and the ID token's `email`. This is where the app does its own setup, such as adding the user to a default group or creating a mailbox named after the immutable `username`.
-- **Copy `name` and `email`** from the ID token at every sign-in and refresh, so the app's own joins keep working.
+- **Copy `name` and `email`** at every sign-in from the ID token, and `name` at every refresh from the access token, so the app's own joins keep working. A refresh carries no ID token, so an email changed since the sign-in arrives at the next one, or from userinfo.
 - **After the cutover,** remove the local password columns and sign-in code in a later release.
 
 ### 12.3 A native app
@@ -925,8 +934,8 @@ Each section covers a kind of app (§2.2). Every kind starts the same way: an `a
 
 For IMAP, SMTP, CalDAV, WebDAV and the like:
 - **Check the password with `auth.introspect(password)`.** The app password identifies its user by itself. The server then checks that this user matches the username the client sent, and that the credential's scopes cover the protocol (the service declares them, for example `imap` and `smtp`).
-- **Cache positive results** with the client's cache (§7.6). Pass the protocol client's address as `X-Real-IP`, which auth uses only for its introspection-failure counter (§9.4).
-- **On `credential.revoked`, `user.disabled` or `access.changed`,** close the user's connections on every copy of the server.
+- **Cache positive results** with the client's cache (§7.6). Pass the protocol client's address as `X-Real-IP` (`auth.introspect(password, { ip })`), which auth uses only for its introspection-failure counter (§9.4).
+- **On `credential.revoked`, `user.disabled`, `user.deleted` or `access.changed`,** close the user's connections on every copy of the server. Deleting a user removes their credentials without a `credential.revoked` for each.
 - **Don't accept the account password** on these protocols once the user has MFA, or the protocol becomes a way around it. During a migration, the server can keep accepting its old local passwords until a cutover date, and tell users to create app passwords.
 - **Prerequisite:** the server refuses AUTH before TLS on every port, because an app password is a full credential for the protocol.
 
@@ -981,9 +990,9 @@ An app that sends mail through a mail server, or a job that writes to another ap
 2. **Deploy auth with no apps,** and sign in as the first admin, with TOTP.
 3. **A low-risk internal tool first**, then the web apps one at a time, each behind its flag (§12). Check each one: disabling a user gives 403 within 10 s through an event, and within 10 minutes with events off.
 4. **Password-only protocols:** users create app passwords, and then a cutover date turns off the old local passwords.
-5. **Clean up:** remove local sign-in code, password columns and flags, one release after nothing has used the fallbacks (audit `login.local` = 0).
+5. **Clean up:** remove local sign-in code, password columns and flags, one release after nothing has used the fallbacks (the app's own count of local sign-ins is 0).
 
-**Moving existing users.** For a handful of people, create their accounts with the CLI and let auth email each one an activation link (set a password, enroll TOTP). That is simpler and safer than importing hashes. For more users, import their existing password hashes as a one-off: `Bun.password.verify` reads argon2id and bcrypt PHC strings and re-hashes to argon2id at the first sign-in. Note that bcrypt reads only the first 72 bytes of a password, and some apps truncate before hashing; an import has to verify the way the source app hashed, so a bcrypt hash is verified against the first 72 bytes. An imported hash is verified at its own cost until that first sign-in, behind the same hashing slot, so only hashes within §9.1's budget are taken: argon2 with at most m = 19 MiB and t = 3, or bcrypt with a cost of at most 12. A user whose hash costs more is imported without one and gets an activation link. `bun cli.ts import users <file>` reads one JSON object per line, `{"username", "email", "name"?, "email_verified"?, "password_hash"?, "access"?: {"<service>": "<role>"}}`. A user without a password hash gets an activation link, as with `user create`.
+**Moving existing users.** For a handful of people, create their accounts with the CLI and let auth email each one an activation link (set a password, enroll TOTP). That is simpler and safer than importing hashes. For more users, import their existing password hashes as a one-off: `Bun.password.verify` reads argon2id and bcrypt PHC strings and re-hashes to argon2id at the first sign-in. Note that bcrypt reads only the first 72 bytes of a password, and some apps truncate before hashing; an import has to verify the way the source app hashed, so a bcrypt hash is verified against the first 72 bytes. An imported hash is verified at its own cost until that first sign-in, behind the same hashing slot, so only hashes within §9.1's budget are taken: argon2id, argon2i or argon2d with at most m = 19 MiB, t = 3 and p = 4, or bcrypt with a cost of at most 12. A hash that costs more is refused, like any other problem; left out of the line, it gives its user an activation link instead. `bun cli.ts import users <file>` reads one JSON object per line, `{"username", "email", "name"?, "email_verified"?, "password_hash"?, "access"?: {"<service>": "<role>"}}`. A user without a password hash gets an activation link, as with `user create`.
 
 Both imports are all or nothing: every line is checked first, every problem is listed by line number without echoing a hash, and nothing is written unless all pass. An import takes at most 10,000 lines and 8 MB, and an owner holds at most 100 live API keys, as when they create their own. `--dry-run` stops after the checks, and `-` in place of the file reads standard input, so a file on the operator's machine can be piped into `docker exec -i`. Each imported row is audited as `host-cli`.
 
