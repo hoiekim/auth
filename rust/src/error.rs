@@ -32,6 +32,9 @@ pub enum Error {
     Http(HttpError),
     Db(tokio_postgres::Error),
     Pool,
+    /// A signing key whose stored public half can't be used, by its kid
+    /// (which is public).
+    UnreadableKey(String),
     /// Anything else, by the name it is logged under.
     Other(&'static str),
 }
@@ -46,6 +49,7 @@ impl Error {
             Error::Http(_) => "HttpError",
             Error::Db(_) => "PostgresError",
             Error::Pool => "PoolError",
+            Error::UnreadableKey(_) => "UnreadableKeyError",
             Error::Other(name) => name,
         }
     }

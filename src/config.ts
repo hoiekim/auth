@@ -210,6 +210,8 @@ function parseIssuer(raw: string, problems: string[]): string {
     (url.pathname === "/" || url.pathname === "") &&
     !url.search &&
     !url.hash &&
+    // An empty query or fragment reads as none above.
+    !/[?#]/.test(raw) &&
     !raw.endsWith("/");
   if (!ok || !url) {
     // Not echoed: a mistake here can be another variable's value, credentials included.

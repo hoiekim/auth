@@ -200,6 +200,28 @@ describe.skipIf(!enabled)("the break-glass CLI", () => {
       await stack.http.waitForAlert(`auth (break-glass CLI): created ${username} with auth:admin`);
     });
 
+    test("the alert a change to who administers auth raises is answered before the CLI exits", async () => {
+      const username = unique("root-wait");
+      let answeredAt = 0;
+      stack.http.onAlert = async (text) => {
+        if (text.includes("was given auth:admin")) {
+          await Bun.sleep(400);
+          answeredAt = Date.now();
+        }
+        return 200;
+      };
+      try {
+        expect((await cli(["user", "create", "--username", username, "--email", `${username}@example.com`, "--access", "auth:admin", "--print-link"])).code).toBe(0);
+        const exitedAt = Date.now();
+        const row = (await userRow(username))!;
+        expect(stack.alerts).toContain(`auth: ${row.id} was given auth:admin by host-cli`);
+        expect(answeredAt).toBeGreaterThan(0);
+        expect(exitedAt).toBeGreaterThanOrEqual(answeredAt);
+      } finally {
+        stack.http.onAlert = () => 200;
+      }
+    });
+
     test.each([
       ["an unknown role", "wiki:root"],
       ["an unknown service", "nowhere:member"],
@@ -207,6 +229,8 @@ describe.skipIf(!enabled)("the break-glass CLI", () => {
       ["an empty role", "wiki:"],
       ["no service", ":member"],
       ["a role of another service", "wiki:user"],
+      ["a third part", "wiki:member:x"],
+      ["a trailing colon", "wiki:member:"],
     ])("--access with %s is refused, and nothing is written", async (_, grant) => {
       const username = unique("frank");
       expectExit(await cli(["user", "create", "--username", username, "--email", `${username}@example.com`, "--access", "wiki:member", "--access", grant]), 2, [
@@ -505,7 +529,7 @@ describe.skipIf(!enabled)("the break-glass CLI", () => {
         const v3 = new Crypt(Buffer.alloc(32, 3), 3);
         await e.db`INSERT INTO totp (user_id, secret_enc) VALUES (${c.id}, ${v3.encrypt(randomBytes(20), c.id)})`;
         expectExit(await e.cli(["encryption", "status"], { env: v2 }), 0, [
-          "TOTP secrets: v1: 2, v3: 1 (1 under a key that isn't configured)",
+          "TOTP secrets: v1: 2, v3: 1 (1 no configured key can read)",
           "signing keys: v1: 1",
           "AUTH_ENCRYPTION_KEY is v2",
         ]);
@@ -531,10 +555,20 @@ describe.skipIf(!enabled)("the break-glass CLI", () => {
         const [signing] = await e.db`SELECT kid, private_key_enc FROM signing_keys`;
         expect(crypt2.decrypt(signing.private_key_enc, signing.kid).length).toBeGreaterThan(0);
         expectExit(await e.cli(["encryption", "status"], { env: v2 }), 0, [
-          "TOTP secrets: v2: 2, v3: 1 (1 under a key that isn't configured)",
+          "TOTP secrets: v2: 2, v3: 1 (1 no configured key can read)",
           "signing keys: v2: 1",
           "AUTH_ENCRYPTION_KEY is v2",
         ]);
+
+        // A value with no version at all.
+        const d = await e.user({ username: "dave" });
+        await e.db`INSERT INTO totp (user_id, secret_enc) VALUES (${d.id}, '\\x00010203'::bytea)`;
+        expectExit(await e.cli(["encryption", "status"], { env: v2 }), 0, [
+          "TOTP secrets: v2: 2, v3: 1, no version: 1 (2 no configured key can read)",
+          "signing keys: v2: 1",
+          "AUTH_ENCRYPTION_KEY is v2",
+        ]);
+        await e.db`DELETE FROM totp WHERE user_id = ${d.id}`;
 
         // Once it's gone, a second run has nothing left to do.
         await e.db`DELETE FROM totp WHERE user_id = ${c.id}`;

@@ -35,6 +35,7 @@ pub struct Shared {
     pub ready: AtomicBool,
     mail_slots: Arc<Semaphore>,
     mails_in_flight: Arc<AtomicUsize>,
+    alerts_in_flight: Arc<AtomicUsize>,
     log_to_stderr: bool,
 }
 
@@ -85,6 +86,7 @@ impl App {
             ready: AtomicBool::new(false),
             mail_slots: Arc::new(Semaphore::new(2)),
             mails_in_flight: Arc::new(AtomicUsize::new(0)),
+            alerts_in_flight: Arc::new(AtomicUsize::new(0)),
             log_to_stderr,
             pool,
             config,
@@ -136,13 +138,23 @@ impl App {
         }
     }
 
-    /// Posts to the deployment's alert webhook, when it has one.
+    /// Posts to the deployment's alert webhook, when it has one, after the
+    /// caller's response.
     pub fn alert(&self, text: String) {
         let Some(url) = self.shared.config.alert_webhook_url.clone() else { return };
         let shared = self.shared.clone();
+        shared.alerts_in_flight.fetch_add(1, Ordering::SeqCst);
         tokio::spawn(async move {
             post_alert(&shared.http, &url, &text, |line| log_line(shared.log_to_stderr, line)).await;
+            shared.alerts_in_flight.fetch_sub(1, Ordering::SeqCst);
         });
+    }
+
+    /// Settles once every alert posted has been answered or has failed.
+    pub async fn drain_alerts(&self) {
+        while self.shared.alerts_in_flight.load(Ordering::SeqCst) > 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     pub async fn breached(&self, password: &str) -> bool {

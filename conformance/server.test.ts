@@ -143,6 +143,30 @@ describe.skipIf(!enabled)("the server process", () => {
     });
   });
 
+    test.each([
+      ["a JSON string", `"not a key"`],
+      ["an empty object", `{}`],
+      ["an array", `[1]`],
+      ["another curve", `{"kty":"OKP","crv":"Ed448","x":"${"A".repeat(43)}"}`],
+      ["an x one character short", `{"kty":"OKP","crv":"Ed25519","x":"${"A".repeat(42)}"}`],
+      ["an x outside base64url", `{"kty":"OKP","crv":"Ed25519","x":"${"A".repeat(42)}+"}`],
+    ])("a signing key whose public half is %s holds the start, named, until it is fixed", async (_, broken) => {
+      const [key] = await stack.db`SELECT kid, public_jwk::text AS jwk FROM signing_keys ORDER BY sign_from LIMIT 1`;
+      await stack.db`UPDATE signing_keys SET public_jwk = ${broken}::text::jsonb WHERE kid = ${key.kid}`;
+      const copy = await stack.spawn();
+      try {
+        const line = `start: signing key ${key.kid} has an unreadable public key, retrying`;
+        await waitFor(() => copy.logs.includes(line), "the copy to name the key", 15_000);
+        expect(copy.logs.some((l) => l.startsWith("start: database not ready"))).toBe(false);
+        expect((await fetch(`${copy.url}/.well-known/jwks.json`)).status).toBe(503);
+      } finally {
+        await stack.db`UPDATE signing_keys SET public_jwk = ${key.jwk}::text::jsonb WHERE kid = ${key.kid}`;
+      }
+      // Fixed, a later attempt starts it.
+      await waitFor(async () => (await fetch(`${copy.url}/.well-known/jwks.json`)).status === 200, "the copy to start", 20_000);
+      expect(await copy.stop()).toBe(0);
+    });
+
   describe("the Host header", () => {
     const get = (host: string | null, version: string) =>
       raw(stack.port, `GET /healthz?code=abc123 HTTP/${version}\r\n${host === null ? "" : `Host: ${host}\r\n`}Connection: close\r\n\r\n`);

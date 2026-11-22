@@ -3,7 +3,7 @@ import { ConfigError, loadConfig, type Config } from "./config";
 import { connect } from "./db";
 import { errorResponse, MAX_BODY_BYTES } from "./http";
 import { startJobs } from "./jobs";
-import { rotateKeys } from "./keys";
+import { rotateKeys, UnreadableKeyError } from "./keys";
 import { smtpMailer } from "./mail";
 import { migrate } from "./migrate";
 import { clientIp } from "./net";
@@ -74,7 +74,8 @@ async function start() {
       await noteHeld(app);
       break;
     } catch (e) {
-      console.log(`start: database not ready (${e instanceof Error ? e.name : typeof e}), retrying`);
+      if (e instanceof UnreadableKeyError) console.log(`start: ${e.message}, retrying`);
+      else console.log(`start: database not ready (${e instanceof Error ? e.name : typeof e}), retrying`);
       await Bun.sleep(Math.min(1000 * attempt, 10_000));
     }
   }
@@ -92,8 +93,9 @@ async function stop(signal: string) {
   console.log(`${signal}: finishing requests in flight`);
   await server.stop();
   await jobs?.stop();
-  // Emails queued by the last requests go out, within the stop's grace period.
-  await Promise.race([app.drainMail(), Bun.sleep(5000)]);
+  // Emails and alerts the last requests raised go out, within the stop's
+  // grace period.
+  await Promise.race([Promise.all([app.drainMail(), app.drainAlerts()]), Bun.sleep(5000)]);
   await sql.close({ timeout: 5 });
   process.exit(0);
 }

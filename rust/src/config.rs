@@ -245,6 +245,8 @@ fn parse_issuer(raw: &str, problems: &mut Vec<String>) -> String {
             && (url.path() == "/" || url.path().is_empty())
             && url.query().unwrap_or("").is_empty()
             && url.fragment().unwrap_or("").is_empty()
+            // An empty query or fragment reads as none above.
+            && !raw.contains(['?', '#'])
             && !raw.ends_with('/')
     });
     match ok {

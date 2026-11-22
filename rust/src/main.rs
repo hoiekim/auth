@@ -55,7 +55,7 @@ use tokio::signal::unix::{signal, SignalKind};
 
 use crate::app::App;
 use crate::config::{load_config, ConfigError};
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -162,6 +162,7 @@ async fn serve() -> u8 {
                         eprintln!("{}", ConfigError { problems }.message());
                         std::process::exit(1);
                     }
+                    Err(Error::UnreadableKey(kid)) => app.log(&format!("start: signing key {kid} has an unreadable public key, retrying")),
                     Err(e) => app.log(&format!("start: database not ready ({}), retrying", e.name())),
                 }
                 tokio::select! {
@@ -188,8 +189,9 @@ async fn serve() -> u8 {
     if let Ok(Some(jobs)) = starting.await {
         jobs.stop().await;
     }
-    // Emails queued by the last requests go out, within the stop's grace period.
-    let _ = tokio::time::timeout(Duration::from_secs(5), app.drain_mail()).await;
+    // Emails and alerts the last requests raised go out, within the stop's
+    // grace period.
+    let _ = tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(app.drain_mail(), app.drain_alerts()) }).await;
     app.pool.close();
     0
 }

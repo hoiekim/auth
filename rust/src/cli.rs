@@ -207,8 +207,8 @@ impl Cli {
                     let mut parts = g.split(':');
                     let service = parts.next().filter(|s| !s.is_empty()).and_then(|s| app.services.get(s));
                     let role = parts.next().filter(|r| !r.is_empty());
-                    match (service, role) {
-                        (Some(service), Some(role)) if service.has_role(role) => grants.push((service.clone(), role.to_string())),
+                    match (service, role, parts.next()) {
+                        (Some(service), Some(role), None) if service.has_role(role) => grants.push((service.clone(), role.to_string())),
                         _ => return usage(format!("--access {g}: use <service>:<role> with a role the service declares")),
                     }
                 }
@@ -334,11 +334,12 @@ impl Cli {
             (Some("encryption"), Some("status")) => {
                 for c in encryption_status(&app.pool, &app.crypt).await? {
                     let mut counts: Vec<String> = c.by_version.iter().map(|(v, n)| format!("v{v}: {n}")).collect();
+                    // A value with no version prefix names no key at all.
                     if c.unversioned > 0 {
-                        counts.push(format!("vnone: {}", c.unversioned));
+                        counts.push(format!("no version: {}", c.unversioned));
                     }
                     let counts = if counts.is_empty() { "none".to_string() } else { counts.join(", ") };
-                    let unreadable = if c.unreadable > 0 { format!(" ({} under a key that isn't configured)", c.unreadable) } else { String::new() };
+                    let unreadable = if c.unreadable > 0 { format!(" ({} no configured key can read)", c.unreadable) } else { String::new() };
                     self.out(&format!("{}: {counts}{unreadable}", c.label));
                 }
                 self.out(&format!("AUTH_ENCRYPTION_KEY is v{}", app.crypt.version()));
@@ -461,6 +462,9 @@ pub async fn main(argv: &[String]) -> u8 {
             1
         }
     };
+    // Alerts a command's changes raised go out before the process ends; each
+    // gives up after five seconds.
+    app.drain_alerts().await;
     app.pool.close();
     code
 }

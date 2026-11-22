@@ -16,6 +16,14 @@ use crate::error::{Error, Result};
 use crate::jwt::Signer;
 use crate::util::{b64url, from_b64};
 
+/// An Ed25519 public key as this service writes one: an object, OKP,
+/// Ed25519, and 32 bytes of x in base64url.
+fn public_key_of(jwk: &Value) -> Option<Vec<u8>> {
+    let (Some("OKP"), Some("Ed25519"), Some(x)) = (jwk.get("kty").and_then(Value::as_str), jwk.get("crv").and_then(Value::as_str), jwk.get("x").and_then(Value::as_str)) else { return None };
+    let encoded = x.len() == 43 && x.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    Some(from_b64(x)).filter(|key| encoded && key.len() == 32)
+}
+
 struct LoadedKey {
     kid: String,
     jwk: Value,
@@ -81,6 +89,13 @@ impl KeyStore {
             )
             .await?;
         let mut state = self.state.lock().unwrap();
+        // Checked before anything changes: a key already loaded isn't read again.
+        for r in &rows {
+            let kid: String = r.try_get("kid")?;
+            if !state.published.iter().any(|k| k.kid == kid) && public_key_of(&r.try_get("public_jwk")?).is_none() {
+                return Err(Error::UnreadableKey(kid));
+            }
+        }
         let mut previous = std::mem::take(&mut state.published);
         let mut signer_kid = None;
         for r in &rows {
@@ -93,7 +108,7 @@ impl KeyStore {
                 Some(k) => k,
                 None => {
                     let jwk: Value = r.try_get("public_jwk")?;
-                    let public = from_b64(jwk.get("x").and_then(Value::as_str).unwrap_or(""));
+                    let public = public_key_of(&jwk).ok_or_else(|| Error::UnreadableKey(kid.clone()))?;
                     LoadedKey { kid, jwk, public, sealed: r.try_get("private_key_enc")?, private: None }
                 }
             };
