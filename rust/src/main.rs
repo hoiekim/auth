@@ -21,6 +21,7 @@ mod http;
 mod imports;
 mod invites;
 mod jobs;
+mod json;
 mod jwt;
 mod keys;
 mod mail;
@@ -139,6 +140,11 @@ async fn serve() -> u8 {
             return 1;
         }
     };
+    // A deploy stops the old copy with SIGTERM while the new one serves.
+    // Requests in flight finish; new ones go to the other copy. Listened for
+    // before the server says it listens: a stop that follows at once is never
+    // the default kill.
+    let (mut term, mut int) = (signal(SignalKind::terminate()).expect("SIGTERM"), signal(SignalKind::interrupt()).expect("SIGINT"));
     println!("listening on :{port}");
 
     let (stop, stopped) = tokio::sync::watch::channel(false);
@@ -156,7 +162,13 @@ async fn serve() -> u8 {
         async move {
             let mut attempt: u64 = 1;
             loop {
-                match bring_up(&app).await {
+                // A stop doesn't wait for an attempt in flight: a database that
+                // never answers would hold it past the stop's grace period.
+                let attempt_made = tokio::select! {
+                    outcome = bring_up(&app) => outcome,
+                    _ = stopped.wait_for(|s| *s) => return None,
+                };
+                match attempt_made {
                     Ok(None) => break,
                     Ok(Some(problems)) => {
                         eprintln!("{}", ConfigError { problems }.message());
@@ -176,9 +188,6 @@ async fn serve() -> u8 {
         }
     });
 
-    // A deploy stops the old copy with SIGTERM while the new one serves.
-    // Requests in flight finish; new ones go to the other copy.
-    let (mut term, mut int) = (signal(SignalKind::terminate()).expect("SIGTERM"), signal(SignalKind::interrupt()).expect("SIGINT"));
     let name = tokio::select! {
         _ = term.recv() => "SIGTERM",
         _ = int.recv() => "SIGINT",

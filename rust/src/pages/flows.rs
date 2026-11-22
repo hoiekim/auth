@@ -285,7 +285,8 @@ pub async fn post_invite(ctx: Ctx) -> Result<Response> {
 
 /// A link's account, while the link is live and the account still has the
 /// address it was mailed to: a link gives nothing to an address the account
-/// no longer has.
+/// no longer has. One made with no address (the CLI's --print-link, for an
+/// account without one) holds while the account still has none.
 async fn token_user(app: &App, purpose: Purpose, token: Option<&str>) -> Result<Option<UserRow>> {
     match peek_token(app.db(), purpose, token).await? {
         Some(row) => Ok(find_user(app.db(), &row.user_id).await?.filter(|user| same_address(row.email.as_deref(), user.email.as_deref()))),
@@ -294,7 +295,10 @@ async fn token_user(app: &App, purpose: Purpose, token: Option<&str>) -> Result<
 }
 
 fn same_address(a: Option<&str>, b: Option<&str>) -> bool {
-    matches!((a, b), (Some(a), Some(b)) if a.to_lowercase() == b.to_lowercase())
+    match (a, b) {
+        (Some(a), Some(b)) => a.to_lowercase() == b.to_lowercase(),
+        (a, b) => a.is_none() && b.is_none(),
+    }
 }
 
 pub async fn get_activate(ctx: Ctx) -> Result<Response> {
@@ -634,7 +638,7 @@ pub async fn post_reset_confirm(ctx: Ctx) -> Result<Response> {
             }
             used
         } else {
-            let response: Value = serde_json::from_str(form.get("passkey").unwrap_or("null")).unwrap_or(Value::Null);
+            let response: Value = crate::json::parse(form.get("passkey").unwrap_or("null")).unwrap_or(Value::Null);
             finish_authentication(app, host_cookie(&ctx.req, WEBAUTHN).as_deref(), Some(&response)).await?.as_deref() == Some(user.id.as_str())
         };
         if !ok {

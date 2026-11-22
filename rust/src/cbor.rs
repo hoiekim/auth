@@ -121,7 +121,9 @@ impl<'a> Reader<'a> {
             }
             3 => {
                 let n = self.argument(info)?;
-                Ok(Cbor::Text(std::str::from_utf8(self.take(n)?).map_err(|_| CborError)?.to_string()))
+                // As TextDecoder reads it: one leading byte-order mark dropped.
+                let text = std::str::from_utf8(self.take(n)?).map_err(|_| CborError)?;
+                Ok(Cbor::Text(text.strip_prefix('\u{feff}').unwrap_or(text).to_string()))
             }
             // A count larger than what is left fails at the first missing item:
             // every item takes at least one byte.

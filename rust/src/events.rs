@@ -146,5 +146,5 @@ async fn deliver_one(app: &App, row: Due) -> Result<()> {
 
 fn issued_at(token: &str) -> f64 {
     let payload = token.split('.').nth(1).unwrap_or("");
-    serde_json::from_slice::<Value>(&from_b64(payload)).ok().and_then(|p| p.get("iat").filter(|v| v.is_number()).and_then(Value::as_f64)).unwrap_or(0.0)
+    crate::json::parse(&String::from_utf8_lossy(&from_b64(payload))).and_then(|p| p.get("iat").filter(|v| v.is_number()).and_then(Value::as_f64)).unwrap_or(0.0)
 }

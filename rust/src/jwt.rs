@@ -33,7 +33,7 @@ pub struct VerifyOptions<'a> {
 }
 
 fn record(part: &str) -> Option<Map<String, Value>> {
-    match serde_json::from_str(&String::from_utf8_lossy(&from_b64(part))).ok()? {
+    match crate::json::parse(&String::from_utf8_lossy(&from_b64(part)))? {
         Value::Object(map) => Some(map),
         _ => None,
     }

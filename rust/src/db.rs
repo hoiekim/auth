@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use deadpool_postgres::{Hook, HookError, Manager, ManagerConfig, Object, Pool, RecyclingMethod};
+use deadpool_postgres::{Hook, HookError, Manager, ManagerConfig, Object, Pool, RecyclingMethod, Runtime};
 use tokio::sync::watch;
 use tokio_postgres::config::ChannelBinding;
 use tokio_postgres::tls::MakeTlsConnect;
@@ -60,15 +60,17 @@ pub fn connect(url: &str) -> std::result::Result<Pool, Error> {
         config.options(&options);
     }
     // Bun gives up on a connection after 30 seconds unless told otherwise;
-    // 0 waits for ever.
-    match s.connect_timeout {
-        None => {
-            config.connect_timeout(Duration::from_secs(30));
-        }
-        Some(timeout) if !timeout.is_zero() => {
-            config.connect_timeout(timeout);
-        }
-        Some(_) => {}
+    // 0 waits for ever. Its timeout covers the whole connection, so a server
+    // that takes the socket and never answers is given up on too: here the
+    // pool's create timeout covers what tokio-postgres's (the socket alone)
+    // doesn't.
+    let connect_timeout = match s.connect_timeout {
+        None => Some(Duration::from_secs(30)),
+        Some(timeout) if !timeout.is_zero() => Some(timeout),
+        Some(_) => None,
+    };
+    if let Some(timeout) = connect_timeout {
+        config.connect_timeout(timeout);
     }
     config.channel_binding(match s.channel_binding.as_str() {
         "require" => ChannelBinding::Require,
@@ -85,7 +87,7 @@ pub fn connect(url: &str) -> std::result::Result<Pool, Error> {
         SslMode::Disable => Manager::from_config(config, tokio_postgres::NoTls, recycle),
         mode => Manager::from_config(config, PostgresTls { mode, files: s.tls.clone() }, recycle),
     };
-    let mut pool = Pool::builder(manager).max_size(5);
+    let mut pool = Pool::builder(manager).max_size(5).runtime(Runtime::Tokio1).create_timeout(connect_timeout);
     // A connection idle, or open, for longer than the URL allows is closed
     // when next taken, and another opened in its place.
     let (idle, lifetime) = (s.idle_timeout.filter(|d| !d.is_zero()), s.max_lifetime.filter(|d| !d.is_zero()));

@@ -240,7 +240,7 @@ pub fn is_loopback_host(hostname: &str) -> bool {
 
 pub fn parse_services(text: &str) -> (Services, Vec<String>) {
     let empty = || Services::new(Vec::new(), Vec::new());
-    let Ok(doc) = serde_json::from_str::<Value>(text) else {
+    let Some(doc) = crate::json::parse(text) else {
         return (empty(), vec!["the services file is not valid JSON".into()]);
     };
     let Some(list) = doc.as_object().and_then(|d| d.get("services")).and_then(Value::as_array) else {

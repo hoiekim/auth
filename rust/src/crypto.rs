@@ -212,7 +212,7 @@ impl Encrypter {
         let sealed = from_b64(token);
         let version = Encrypter::version_of(&sealed)?;
         let key = self.subkey(version, &format!("sealed:{purpose}"))?;
-        let body: Value = serde_json::from_slice(&open(&key, &sealed, purpose).ok()?).ok()?;
+        let body: Value = crate::json::parse(&String::from_utf8_lossy(&open(&key, &sealed, purpose).ok()?))?;
         let exp = body.as_object()?.get("exp")?.as_f64()?;
         if exp < now_ms() as f64 {
             return None;

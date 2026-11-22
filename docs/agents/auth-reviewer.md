@@ -128,6 +128,7 @@ For every line the diff DELETES or replaces, name the invariant it enforced. Sea
 ### E2. Language pitfalls (Rust)
 
 - **JavaScript's semantics, where the Bun code relies on them.** A length limit counts UTF-16 units, `trim()` trims JavaScript's whitespace, `Number()` reads `0x10` and ` 5 `, `decodeURIComponent` throws on a bad escape, and `toISOString()` floors to milliseconds; `rust/src/util.rs` has each (`utf16_len`, `js_trim`, `js_number`, `decode_uri_component`, `iso`). Rust's own `len()`, `trim()` or `parse()` where the Bun code uses JavaScript's is a finding, with a conformance test at the boundary that tells them apart.
+- **JSON is read with `crate::json::parse`, as `JSON.parse` reads it**: no depth limit, `1e400` a number, a lone surrogate kept (as U+FFFD), a repeated key's last value. A new `serde_json::from_str` on anything a request, a file or a token carries refuses what the Bun server takes; CBOR text drops one leading byte-order mark, as `TextDecoder` does.
 - **A panic is a 500, not a crash**, since each request runs in a task of its own; but `unwrap`, `expect` or indexing on anything a request, a file or the database shapes is still a finding: return the error the Bun code's branch returns.
 - **Effects outside the database wait for the commit**: emails, alerts and wake-ups go through `Tx::after`, as the Bun code's run after its transaction; one sent from inside the transaction can go out for a change that rolls back.
 

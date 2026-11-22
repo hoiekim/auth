@@ -219,7 +219,8 @@ export async function getActivate({ req, url, deps: app }: Ctx<App>): Promise<Re
 
 // A link's account, while the link is live and the account still has the
 // address it was mailed to: a link gives nothing to an address the account
-// no longer has.
+// no longer has. One made with no address (the CLI's --print-link, for an
+// account without one) holds while the account still has none.
 async function tokenUser(app: App, purpose: "activate" | "reset", token: string | null): Promise<UserRow | null> {
   const row = await peekToken(app.sql, purpose, token);
   const user = row ? await findUser(app.sql, row.user_id) : null;
@@ -227,7 +228,7 @@ async function tokenUser(app: App, purpose: "activate" | "reset", token: string 
 }
 
 function sameAddress(a: string | null, b: string | null): boolean {
-  return a !== null && b !== null && a.toLowerCase() === b.toLowerCase();
+  return a === null || b === null ? a === b : a.toLowerCase() === b.toLowerCase();
 }
 
 // Thrown to roll a transaction back when it finds its change can't be made.

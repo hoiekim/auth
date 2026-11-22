@@ -313,6 +313,7 @@ describe.skipIf(!enabled)("passkeys", () => {
       ["authData cut inside the credential id's length", { attestationObject: (f: Map<string, CborValue>) => encodeCbor(f.set("authData", (f.get("authData") as Uint8Array).subarray(0, 54))) }],
       ["authData cut inside the credential id", { attestationObject: (f: Map<string, CborValue>) => encodeCbor(f.set("authData", (f.get("authData") as Uint8Array).subarray(0, 60))) }],
       ["authData cut inside the key", { attestationObject: (f: Map<string, CborValue>) => encodeCbor(f.set("authData", (f.get("authData") as Uint8Array).subarray(0, 80))) }],
+      ["fmt twice, once behind a byte-order mark", { attestationObject: (f: Map<string, CborValue>) => encodeCbor(new Map<string, CborValue>([["fmt", "none"], ["\ufefffmt", "none"], ["attStmt", f.get("attStmt")!], ["authData", f.get("authData")!]])) }],
       ["text map keys in the attestation as numbers", { attestationObject: (f: Map<string, CborValue>) => encodeCbor(new Map<number, CborValue>([[1, f.get("fmt")!], [2, f.get("attStmt")!], [3, f.get("authData")!]])) }],
     ] as const)("refuses %s", async (_, edit) => {
       const { user, browser } = await signedIn("refuse");
@@ -342,6 +343,11 @@ describe.skipIf(!enabled)("passkeys", () => {
       ["the fields in another order", { attestationObject: (f: Map<string, CborValue>) => encodeCbor(new Map<string, CborValue>([["authData", f.get("authData")!], ["fmt", f.get("fmt")!], ["attStmt", f.get("attStmt")!]])) }],
       ["an extra member in the attestation object", { attestationObject: (f: Map<string, CborValue>) => encodeCbor(f.set("extra", 1)) }],
       ["an RSA exponent written with a leading zero", { publicKey: encodeCbor(new Map<number, CborValue>([[1, 3], [3, -257], [-1, rsaN], [-2, Uint8Array.from([0, 1, 0, 1])]])) }],
+      // Text is read as TextDecoder reads it: one leading byte-order mark dropped.
+      [
+        "a byte-order mark before a field's name and fmt's value",
+        { attestationObject: (f: Map<string, CborValue>) => encodeCbor(new Map<string, CborValue>([["\ufefffmt", "\ufeffnone"], ["attStmt", f.get("attStmt")!], ["\ufeffauthData", f.get("authData")!]])) },
+      ],
     ] as const)("accepts %s", async (_, edit) => {
       const { user, browser } = await signedIn("accept");
       const res = await register(browser, new SoftAuthenticator(), edit as Edits);

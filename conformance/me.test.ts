@@ -364,6 +364,33 @@ describe.skipIf(!enabled)("the self-service API", () => {
         await expectError(await raw(browser, body, "application/json"), 400, "invalid_request", "The body must be a JSON object.");
       });
 
+      // Read as JSON.parse reads it, in both servers.
+      test("nesting far past a parser's usual limit is read, and what isn't asked for is ignored", async () => {
+        const { browser } = await signedIn("deep");
+        const res = await raw(browser, `{"name":"Deep","extra":${"[".repeat(5000)}${"]".repeat(5000)}}`, "application/json");
+        expect(res.status).toBe(200);
+        expect(((await res.json()) as any).name).toBe("Deep");
+      });
+
+      test("an escaped lone surrogate is read, and stored as U+FFFD", async () => {
+        const { user, browser } = await signedIn("lone");
+        expect((await raw(browser, '{"name":"Lone \\ud800 one"}', "application/json")).status).toBe(200);
+        const [row] = await stack.db`SELECT name FROM users WHERE id = ${user.id}`;
+        expect(row.name).toBe("Lone \uFFFD one");
+      });
+
+      test("a number past a double's range is a number, not invalid JSON", async () => {
+        const { browser } = await signedIn("huge");
+        await expectError(await raw(browser, '{"name":1e400}', "application/json"), 400, "invalid_request", "A name is at most 200 characters, with no control characters.");
+      });
+
+      test("a key given twice takes its last value", async () => {
+        const { browser } = await signedIn("twice");
+        const res = await raw(browser, '{"name":"First","name":"Last"}', "application/json");
+        expect(res.status).toBe(200);
+        expect(((await res.json()) as any).name).toBe("Last");
+      });
+
       test("an empty body is an empty object", async () => {
         const { user, browser } = await signedIn("empty");
         const res = await raw(browser, "", "application/json");

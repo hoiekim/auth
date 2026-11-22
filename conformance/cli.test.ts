@@ -433,6 +433,25 @@ describe.skipIf(!enabled)("the break-glass CLI", () => {
       const exit = await cli(["user", "reset-link", user.username, "--print-link"]);
       expect(exit.code).toBe(0);
       expect(exit.out[0]).toStartWith("reset link (works once, 30 minutes): ");
+      // The link opens and resets, though no address was there to bind it to.
+      const link = new URL(exit.out[0]!.slice(exit.out[0]!.indexOf("http")));
+      const page = await stack.browser().get(link.pathname + link.search);
+      expect(page.status).toBe(200);
+      expect(await page.text()).toContain("<h1>Choose a new password</h1>");
+      const password = "a brand new passphrase for sam";
+      const done = await stack.browser().form("/reset/confirm", { token: link.searchParams.get("token")!, password });
+      expect(done.status).toBe(303);
+      expect(done.headers.get("Location")).toBe(`/login?${new URLSearchParams({ login_hint: user.username, notice: "reset" })}`);
+      const [row] = await stack.db`SELECT password_hash FROM users WHERE id = ${user.id}`;
+      expect(await Bun.password.verify(password, row.password_hash)).toBe(true);
+    });
+
+    test("a link made with no address stops working once the account has one", async () => {
+      const user = await stack.user({ username: unique("sid"), email: null });
+      const exit = await cli(["user", "reset-link", user.username, "--print-link"]);
+      const link = new URL(exit.out[0]!.slice(exit.out[0]!.indexOf("http")));
+      await stack.db`UPDATE users SET email = 'sid-new@example.com' WHERE id = ${user.id}`;
+      expect((await stack.browser().get(link.pathname + link.search)).status).toBe(404);
     });
 
     test("a bot has no password to reset", async () => {

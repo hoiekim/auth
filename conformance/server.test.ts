@@ -292,6 +292,52 @@ describe.skipIf(!enabled)("starting and stopping", () => {
     }
   });
 
+  // A database that takes the connection and never says a word.
+  async function tarpit(): Promise<{ port: number; close: () => void }> {
+    const sockets = new Set<import("node:net").Socket>();
+    const server = (await import("node:net")).createServer((socket) => {
+      sockets.add(socket);
+      socket.on("error", () => {});
+    });
+    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+    return {
+      port: (server.address() as import("node:net").AddressInfo).port,
+      close: () => {
+        for (const socket of sockets) socket.destroy();
+        server.close();
+      },
+    };
+  }
+
+  test("a stop while the database never answers exits 0 within a deploy's grace period", async () => {
+    const stack = await Stack.start({ start: false });
+    const db = await tarpit();
+    try {
+      const copy = await stack.spawn({ env: { DATABASE_URL: `postgres://auth:s3cret-pw@127.0.0.1:${db.port}/auth` } });
+      await waitFor(() => copy.logs.some((l) => l.startsWith("listening on :")), "the copy to listen", 20_000);
+      const asked = Date.now();
+      expect(await copy.stop()).toBe(0);
+      expect(Date.now() - asked).toBeLessThan(10_000);
+    } finally {
+      db.close();
+      await stack.stop();
+    }
+  });
+
+  test("a connection the database never answers is given up after connect_timeout, and tried again", async () => {
+    const stack = await Stack.start({ start: false });
+    const db = await tarpit();
+    try {
+      const copy = await stack.spawn({ env: { DATABASE_URL: `postgres://auth:s3cret-pw@127.0.0.1:${db.port}/auth?connect_timeout=1` } });
+      await waitFor(() => copy.logs.filter((l) => /^start: database not ready \(\w+\), retrying$/.test(l)).length >= 2, "two attempts given up", 20_000);
+      expect(copy.logText()).not.toContain("s3cret-pw");
+      expect(await copy.stop()).toBe(0);
+    } finally {
+      db.close();
+      await stack.stop();
+    }
+  });
+
   test("until the database answers, /healthz and everything else answer 503, and the copy keeps trying", async () => {
     const stack = await Stack.start({ start: false });
     try {

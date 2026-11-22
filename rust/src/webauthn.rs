@@ -174,7 +174,7 @@ pub fn verify_assertion(rp: &RelyingParty, challenge: &str, stored_key: &[u8], s
 }
 
 fn client_data_matches(encoded: &str, kind: &str, rp: &RelyingParty, challenge: &str) -> bool {
-    let Ok(Value::Object(c)) = serde_json::from_str::<Value>(&String::from_utf8_lossy(&from_b64(encoded))) else { return false };
+    let Some(Value::Object(c)) = crate::json::parse(&String::from_utf8_lossy(&from_b64(encoded))) else { return false };
     // Auth's pages can't be framed (§9.2), so a cross-origin ceremony is never ours.
     c.get("type").and_then(Value::as_str) == Some(kind)
         && c.get("challenge").and_then(Value::as_str) == Some(challenge)

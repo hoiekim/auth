@@ -755,7 +755,7 @@ CREATE UNLOGGED TABLE throttle (                      -- shared across every cop
 **Recovery email**
 - Must be verified. A sign-up or a change sets the address only once its confirmation link is used, so neither can take, or reveal, an address another account uses: that address's owner gets a notice instead.
 - Changing it emails the old address, and the new one gets a confirmation link.
-- A reset or activation link works only while the account has the address it was mailed to; a refused one isn't spent.
+- A reset or activation link works only while the account has the address it was mailed to, and one made without an address (the CLI's `--print-link`, for an account that has none) only while the account still has none. A refused one isn't spent.
 - A reset link ends all sessions and refresh tokens and needs the second factor if one is enrolled: a TOTP code, a passkey, or a recovery code. A user who has lost the second factor uses a recovery code, or an admin clears it (A5).
 
 **App passwords and API keys**
@@ -1056,20 +1056,31 @@ log lines. `conformance/mixed.test.ts` runs a copy of each on one database,
 both ways. Some of the Bun server's behaviour comes from its runtime rather
 than from `src/`: how `DATABASE_URL` is read (`docs/DEPLOYMENT.md` §3:
 which parameters are the client's, which go to Postgres, `sslmode`, the
-`PG*` variables) and which TLS certificates are accepted (OpenSSL's rules).
+`PG*` variables), which TLS certificates are accepted (OpenSSL's rules), and
+how JSON and CBOR text are read (`JSON.parse`, `TextDecoder`).
 The Rust server reproduces those too. `rust/tests/database_urls.json`
 records Bun's reading of each case, CI checks that the Bun it runs still
 reads them so, and the Rust server's tests check its own reading against
 them. A change to behaviour is made in both, with a test both pass.
 
 **Dependencies.** The Rust server has no runtime's built-ins to lean on, so
-it has crates in their place: tokio and hyper for HTTP, tokio-postgres and
-deadpool-postgres for SQL and the pool (§10), rustls with the bundled public
-roots and the host's for TLS, reqwest for outbound HTTPS, ring for Ed25519,
-AES-GCM, HKDF, HMAC and SHA-2, argon2 and bcrypt, p256 for passkeys'
-ES256, and chrono, serde_json, url and base64. `Cargo.lock` pins every one,
-and the image builds with `--locked`. A deployment that runs the Rust image
-trusts that list where §9.5 has the Bun image trust none.
+it has crates in their place. These are all of `rust/Cargo.toml`'s, which
+change together with this list:
+
+| What Bun gives the Bun server | Crates |
+|---|---|
+| The async runtime and HTTP/1.1 server | tokio, hyper, hyper-util, http-body-util, bytes |
+| SQL and the pool of §10 | tokio-postgres, deadpool-postgres |
+| TLS, to Postgres, the SMTP server and HTTPS | rustls, tokio-rustls, tokio-postgres-rustls, webpki-roots (the bundled public roots), rustls-native-certs (the host's) |
+| Outbound HTTPS | reqwest |
+| Ed25519, AES-GCM, HKDF, HMAC, SHA-1 and SHA-2 | ring |
+| Password hashes (§9.1) | argon2, bcrypt |
+| Passkeys' ES256 | p256 |
+| Dates, JSON, URLs and their encodings | chrono, serde_json, url, form_urlencoded, percent-encoding, base64 |
+
+`Cargo.lock` pins every one, and what they pull in, and the image builds
+with `--locked`. A deployment that runs the Rust image trusts that list where
+§9.5 has the Bun image trust none.
 
 **What a deployment sees differ.**
 - The CLI's name, in its commands and in the messages that name it.

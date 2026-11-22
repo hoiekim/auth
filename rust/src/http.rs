@@ -201,10 +201,10 @@ pub fn read_json(req: &Request) -> Result<Map<String, Value>> {
     if text.is_empty() {
         return Ok(Map::new());
     }
-    match serde_json::from_str::<Value>(&text) {
-        Err(_) => Err(Error::Http(HttpError::new(400, "invalid_request", "The body is not valid JSON."))),
-        Ok(Value::Object(map)) => Ok(map),
-        Ok(_) => Err(Error::Http(HttpError::new(400, "invalid_request", "The body must be a JSON object."))),
+    match crate::json::parse(&text) {
+        None => Err(Error::Http(HttpError::new(400, "invalid_request", "The body is not valid JSON."))),
+        Some(Value::Object(map)) => Ok(map),
+        Some(_) => Err(Error::Http(HttpError::new(400, "invalid_request", "The body must be a JSON object."))),
     }
 }
 

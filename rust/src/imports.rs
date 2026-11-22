@@ -39,10 +39,10 @@ fn parse_lines(text: &str, problems: &mut Vec<String>) -> Vec<(usize, Map<String
         if js_trim(raw).is_empty() {
             continue;
         }
-        match serde_json::from_str::<Value>(raw) {
-            Err(_) => problems.push(format!("line {}: not valid JSON", i + 1)),
-            Ok(Value::Object(value)) => out.push((i + 1, value)),
-            Ok(_) => problems.push(format!("line {}: not a JSON object", i + 1)),
+        match crate::json::parse(raw) {
+            None => problems.push(format!("line {}: not valid JSON", i + 1)),
+            Some(Value::Object(value)) => out.push((i + 1, value)),
+            Some(_) => problems.push(format!("line {}: not a JSON object", i + 1)),
         }
     }
     if out.is_empty() && problems.is_empty() {

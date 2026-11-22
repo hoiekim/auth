@@ -31,6 +31,15 @@ app.pingDatabase = async () => {
 };
 const router = buildRouter();
 
+let jobs: { stop: () => Promise<void> } | null = null;
+let stopping = false;
+// A deploy stops the old copy with SIGTERM while the new one serves.
+// Requests in flight finish; new ones go to the other copy. Listened for
+// before the server says it listens: a stop that follows at once is never
+// the default kill.
+process.on("SIGTERM", () => void stop("SIGTERM"));
+process.on("SIGINT", () => void stop("SIGINT"));
+
 const server = Bun.serve({
   port: config.port,
   // Bun derives this from NODE_ENV when it is left out, and in development
@@ -52,9 +61,6 @@ const server = Bun.serve({
   },
 });
 console.log(`listening on :${server.port}`);
-
-let jobs: { stop: () => Promise<void> } | null = null;
-let stopping = false;
 
 // Migrations need the database, which may still be starting; until they
 // have run, every request but /healthz answers 503.
@@ -85,8 +91,6 @@ async function start() {
 }
 void start();
 
-// A deploy stops the old copy with SIGTERM while the new one serves.
-// Requests in flight finish; new ones go to the other copy.
 async function stop(signal: string) {
   if (stopping) return;
   stopping = true;
@@ -99,5 +103,3 @@ async function stop(signal: string) {
   await sql.close({ timeout: 5 });
   process.exit(0);
 }
-process.on("SIGTERM", () => void stop("SIGTERM"));
-process.on("SIGINT", () => void stop("SIGINT"));
