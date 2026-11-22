@@ -329,11 +329,11 @@ sequenceDiagram
 |---|---|
 | `GET /.well-known/openid-configuration` | Discovery. Lists only what is below. `Cache-Control: max-age=3600`. |
 | `GET /.well-known/jwks.json` | Public keys: the current one, plus the next for the day before it signs and the previous for the day after it stops (§9.3). `Cache-Control: max-age=3600`. |
-| `GET /oauth/authorize` | `response_type=code` only. Required: `client_id`, `redirect_uri` (exact string match against the registered list), `state`, `code_challenge` with `S256`, and `nonce` when `scope` has `openid`. Optional: `prompt=none\|login`, `max_age`, `login_hint`. A parameter given twice is refused. `scope` is read only for `openid`: tokens carry §7.3's claims whatever it asks for. A user without a role on the service gets auth's 403 page (§6 rule 1); one whose role is in `mfa_roles` is asked for the second factor, or to enroll one, first. With `prompt=none` these answer `login_required`, `access_denied` and `interaction_required` at the redirect URI instead. |
+| `GET /oauth/authorize` | `response_type=code` only. Required: `client_id`, `redirect_uri` (exact string match against the registered list), `state` (at most 1024 characters), `code_challenge` with `S256`, and `nonce` when `scope` has `openid`. Optional: `prompt=none\|login`, `max_age`, `login_hint`. A parameter given twice is refused. An error sent back to the redirect URI carries `state` as the client sent it, whenever it sent one (RFC 6749 §4.1.2.1). `scope` is read only for `openid`: tokens carry §7.3's claims whatever it asks for. A user without a role on the service gets auth's 403 page (§6 rule 1); one whose role is in `mfa_roles` is asked for the second factor, or to enroll one, first. With `prompt=none` these answer `login_required`, `access_denied` and `interaction_required` at the redirect URI instead. |
 | `POST /oauth/token` | Grants: `authorization_code` and `refresh_token`. Confidential clients use `client_secret_basic`. Public clients use `none` and PKCE. Redeeming a code answers with an ID token; a refresh doesn't, and for a public client it carries the rotated refresh token. |
 | `POST /oauth/revoke` | RFC 7009. Accepts the caller's own refresh tokens, and answers `200` whether or not it knew the token. A confidential client's call revokes that token. A public client's ends the token's whole family and sends `session.ended` (§7.4): the app is signing a device out. |
 | `POST /oauth/introspect` | RFC 7662, client-authenticated. Checks an **API key or app password**, never a JWT (apps verify those locally). Answers `active: true` only when the credential's service is the caller's, the credential is unexpired and unrevoked, and its owner is enabled and holds a role on that service. Removing someone from a service stops their keys and app passwords for it too. An active answer carries `sub`, `username`, `scope`, the owner's current `role` on that service, and `jti`, the credential's id, so a client can drop its cached answer on `credential.revoked`. |
-| `GET` / `POST /oauth/userinfo` | OIDC userinfo, for clients that expect it: `sub`, `username`, `preferred_username` (the same value), `name`, `email` and `email_verified`, for a valid access token of any service, and otherwise `401 invalid_token`. The client in §7.6 doesn't use it. |
+| `GET` / `POST /oauth/userinfo` | OIDC userinfo, for clients that expect it: `sub`, `username`, `preferred_username` (the same value), `name`, `email` and `email_verified`, for a valid access token of any service but auth's own (which no client has, so none is ever made), and otherwise `401 invalid_token`. The client in §7.6 doesn't use it. |
 | `GET /logout` | RP-initiated logout. `post_logout_redirect_uri` is optional; when given, it must be registered for the `client_id` that comes with it, and gets `state` back. Without one, auth shows its own "signed out" page. |
 
 Not implemented, on purpose: implicit and hybrid flows, the password grant, `client_credentials` (service-to-service access uses bot users, §12.7), dynamic registration, consent screens (every client is registered by the deployment), request objects, PAR, DPoP and mTLS.
@@ -503,6 +503,9 @@ auth.logoutUrl(postLogoutRedirect?)
 - **JSON field names are `snake_case`**, as OAuth's are.
 - **One error shape everywhere, OAuth's:** `{"error": "<code>", "error_description": "<text>"}`. Codes: `invalid_request` 400, `unauthorized` 401, `forbidden` 403, `reauth_required` 403, `not_found` 404, `method_not_allowed` 405 (with `Allow`), `conflict` 409, `rate_limited` 429 (with `Retry-After`), `invalid_grant`, `invalid_client` and `unsupported_grant_type` 400/401 per RFC 6749, `invalid_token` 401 per RFC 6750 (userinfo), `server_error` 500, `temporarily_unavailable` 503.
 - **Lists:** `{"items": […], "next": "<cursor>" | null}`. The lists that can grow long (users, invites, audit) take `?after=<cursor>&limit=` (default 50, at most 100); the others answer everything at once, with `next: null`.
+- **No NUL in a `/v1/` query parameter:** Postgres's text can't hold one, so it is `400 invalid_request`.
+- **A request whose `Host` doesn't make a URL** (missing, or with a path, a user or a character a host can't hold) is answered `400` with no body and the connection closed, and isn't logged: its path can carry a secret.
+- **A `return_to` is a local path of printable ASCII**, as every path auth writes is; anything else leads to `/account`.
 - **IDs** are prefixed by type: `usr_`, `ses_`, `apw_`, `key_`, `inv_`, `evt_`, `pk_` (passkeys). Timestamps are RFC 3339 UTC.
 - **Versioning:** the path is `/v1`. Additive changes don't bump it, and clients ignore unknown fields.
 
@@ -752,6 +755,7 @@ CREATE UNLOGGED TABLE throttle (                      -- shared across every cop
 **Recovery email**
 - Must be verified. A sign-up or a change sets the address only once its confirmation link is used, so neither can take, or reveal, an address another account uses: that address's owner gets a notice instead.
 - Changing it emails the old address, and the new one gets a confirmation link.
+- A reset or activation link works only while the account has the address it was mailed to; a refused one isn't spent.
 - A reset link ends all sessions and refresh tokens and needs the second factor if one is enrolled: a TOTP code, a passkey, or a recovery code. A user who has lost the second factor uses a recovery code, or an admin clears it (A5).
 
 **App passwords and API keys**
@@ -839,7 +843,7 @@ Counters live in the `throttle` table, so every copy shares them and a restart d
 | Database read by a third party | §9.3 |
 | An app password sent before TLS on a password-only protocol | The server refuses AUTH before TLS on every port (§12.4) |
 | A malicious admin, or a mistake | Audit log, an alert on admin actions, A5 needing an out-of-band check. A change to a service, which can add a redirect URI and make a secret, needs a recent sign-in with a second factor, and its alert names each redirect URI it adds; a service in the services file is out of an admin's reach while the file declares it, and a held copy that takes over once the file no longer does is alerted (§6.2). |
-| Account takeover through the recovery email | Old-address notice on change, second factor still required after a reset, 30-minute single-use links |
+| Account takeover through the recovery email | Old-address notice on change, second factor still required after a reset, 30-minute single-use links that work only for the address they were mailed to |
 
 ### 9.6 Availability and break-glass
 
@@ -1085,8 +1089,3 @@ trusts that list where §9.5 has the Bun image trust none.
   `sslpassword`, or reach a Unix socket not named `.s.PGSQL.<port>`. In TLS: a
   certificate issued by a trusted CA but itself marked as a CA is accepted
   by the Bun server and refused by the Rust one.
-- Where the Bun server answers 500 by mistake, the Rust server refuses with
-  400: an impossible `expires_at` date, an audit cursor too large for an
-  id, a request without `Host`. It also orders the audit log by id as a
-  number, and cuts an overlong passkey name between characters, not inside
-  one.
