@@ -612,7 +612,7 @@ async fn revoke_credential_route(ctx: Ctx, kind: Kind) -> Result<Response> {
     let work = async {
         let done = revoke_credential(tx.q(), app, &o.user_id, kind, ctx.param("id"), &o.actor, ctx.ip()).await?;
         if let (true, Some((admin, bot))) = (done, &o.admin) {
-            admin_alert(app, &tx, admin, format!("revoked a {} of the bot {bot}", label(kind)));
+            admin_alert(app, &tx, admin, format!("revoked an {} of the bot {bot}", label(kind)));
         }
         Ok(done)
     }

@@ -995,6 +995,15 @@ describe.skipIf(!enabled)("account flows", () => {
       }
     });
 
+    test("a login with a NUL gets the same page, counted with the NUL kept as U+FFFD", async () => {
+      const name = uname("nul");
+      const res = await stack.browser().form("/reset", { action: "email", login: `${name}\u0000x` });
+      expect(res.status).toBe(200);
+      expect((await pageOf(res)).text).toContain(RESET_SENT);
+      const [row] = await stack.db`SELECT hits FROM throttle WHERE key = ${`mail:to:${name}\uFFFDx`}`;
+      expect(Number(row?.hits)).toBe(1);
+    });
+
     test("by email address, ignoring case and spaces around it, the link goes to the stored address", async () => {
       const u = await stack.user({ username: uname("byaddr"), email: `${uname("Mixed")}@Example.com` });
       expect((await stack.browser().form("/reset", { action: "email", login: `  ${u.email!.toLowerCase()} ` })).status).toBe(200);
@@ -1096,6 +1105,15 @@ describe.skipIf(!enabled)("account flows", () => {
       const anon = (await stack.audit("reset.fail")).filter((r) => r.user_id === null && r.ip === b.ip);
       expect(anon).toHaveLength(1);
       expect(anon[0]!.detail).toEqual({ method: "recovery_code" });
+    });
+
+    test("a login with a NUL is an unknown user, counted with the NUL kept as U+FFFD", async () => {
+      const name = uname("nul");
+      const p = await pageOf(await recovery(stack.browser(), `${name}\u0000x`, "aaaa-aaaa-aaaa-aaaa-aaaa-aaaa"));
+      expect(p.status).toBe(401);
+      expect(p.text).toContain("That username and recovery code don't match.");
+      const [row] = await stack.db`SELECT hits FROM throttle WHERE key = ${`login:name:${name}\uFFFDx`}`;
+      expect(Number(row?.hits)).toBe(1);
     });
 
     test.each([

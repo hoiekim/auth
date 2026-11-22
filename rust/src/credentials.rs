@@ -210,12 +210,11 @@ pub async fn create_credential(q: Q<'_>, app: &App, c: &NewCredential<'_>) -> Re
         if let Some(given) = c.expires_at.filter(|v| !v.is_null()) {
             let Some(text) = given.as_str().filter(|t| parses_as_date(t)) else { bail!(400, "invalid_request", "expires_at must be an RFC 3339 timestamp.") };
             // A date the calendar doesn't have (30 February) reads as a later
-            // one above and is refused by Postgres: it is not a timestamp either.
-            let future = match q.first("SELECT $1::text::timestamptz > now() AS ok", &[&text]).await {
-                Ok(Some(row)) => row.try_get::<_, bool>("ok")?,
-                _ => bail!(400, "invalid_request", "expires_at must be an RFC 3339 timestamp."),
-            };
-            if !future {
+            // one above; Postgres knows better.
+            if !q.one("SELECT pg_input_is_valid($1, 'timestamptz') AS ok", &[&text]).await?.try_get::<_, bool>("ok")? {
+                bail!(400, "invalid_request", "expires_at must be an RFC 3339 timestamp.");
+            }
+            if !q.one("SELECT $1::text::timestamptz > now() AS ok", &[&text]).await?.try_get::<_, bool>("ok")? {
                 bail!(400, "invalid_request", "expires_at must be in the future.");
             }
             expires_at = Some(text.to_string());

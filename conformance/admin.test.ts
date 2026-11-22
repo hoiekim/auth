@@ -51,10 +51,6 @@ describe.skipIf(!enabled)("administration API", () => {
 
   beforeAll(async () => {
     stack = await Stack.start();
-    // Every audit id this file makes has seven digits: the Bun server orders
-    // the log by the id's text (reported), which agrees with its number only
-    // between ids of one length.
-    await stack.db`SELECT setval('audit_id_seq', 1000000)`;
     admin = await stack.admin();
     root = admin.browser;
     rootName = admin.user.username;
@@ -1123,7 +1119,7 @@ describe.skipIf(!enabled)("administration API", () => {
 
       expect((await root.api("DELETE", `/v1/users/${bot.id}/${path}/${made.id}`)).status).toBe(204);
       expect(await bodyOf(await introspect(service, secret), 200)).toEqual({ active: false });
-      await adminAlert(`revoked a ${label} of the bot ${bot.username}`);
+      await adminAlert(`revoked an ${label} of the bot ${bot.username}`);
       const [r] = await auditOf(`${path === "app-passwords" ? "app_password" : "api_key"}.revoke`, bot.id);
       expect(r).toMatchObject({ actor: admin.user.id, detail: { id: made.id, service } });
       expect((await stack.outbox(service)).filter((e) => e.type === "credential.revoked" && e.payload.id === made.id).map((e) => e.payload)).toEqual([
@@ -1432,6 +1428,48 @@ describe.skipIf(!enabled)("administration API", () => {
       expect(exact.next).toBeNull();
       expect(await bodyOf(await root.api("GET", `/v1/audit?user=${user.id}&after=1`), 200)).toEqual({ items: [], next: null });
       expect(await bodyOf(await root.api("GET", `/v1/audit?user=${newId("usr")}`), 200)).toEqual({ items: [], next: null });
+    });
+
+    test("ids of every length come newest first, by number, and page so", async () => {
+      const user = await stack.user({ username: uname("al") });
+      // Far past the sequence; as text they'd sort 900000000, 80000000, 7000000, 3000000000, 2000000000.
+      const ids = [3_000_000_000, 2_000_000_000, 900_000_000, 80_000_000, 7_000_000];
+      for (const id of [...ids].reverse()) await stack.db`INSERT INTO audit (id, action, user_id) VALUES (${id}, 'user.update', ${user.id})`;
+      const all = await bodyOf(await root.api("GET", `/v1/audit?user=${user.id}`), 200);
+      expect(all.items.map((r: any) => r.id)).toEqual(ids.map(String));
+      let next: string | null = null;
+      const paged: string[] = [];
+      do {
+        const page: any = await bodyOf(await root.api("GET", `/v1/audit?user=${user.id}&limit=2${next ? `&after=${next}` : ""}`), 200);
+        paged.push(...page.items.map((r: any) => r.id));
+        next = page.next;
+      } while (next);
+      expect(paged).toEqual(ids.map(String));
+      expect((await bodyOf(await root.api("GET", `/v1/audit?user=${user.id}&after=${ids[2]}`), 200)).items.map((r: any) => r.id)).toEqual(ids.slice(3).map(String));
+      await stack.db`DELETE FROM audit WHERE user_id = ${user.id}`;
+    });
+
+    test.each([
+      ["/v1/users?q=a%00b"],
+      ["/v1/users?after=a%00b"],
+      ["/v1/users?a%00b=1"],
+      ["/v1/audit?user=a%00b"],
+      ["/v1/invites?service=a%00b"],
+      ["/v1/invites?after=a%00b"],
+    ])("%s: a NUL in a query parameter is refused", async (path) => {
+      await expectError(await root.api("GET", path), 400, "invalid_request", "No query parameter may hold a NUL character.");
+    });
+
+    test("a NUL is refused for a client too, and an escaped %00 is only text", async () => {
+      await expectError(await asClient("wiki", "GET", "/v1/users?q=a%00b"), 400, "invalid_request", "No query parameter may hold a NUL character.");
+      expect(await bodyOf(await root.api("GET", "/v1/users?q=a%2500b"), 200)).toEqual({ items: [], next: null });
+    });
+
+    test("the largest bigint is a cursor; anything past it is not", async () => {
+      expect((await root.api("GET", "/v1/audit?limit=1&after=9223372036854775807")).status).toBe(200);
+      for (const after of ["9223372036854775808", "99999999999999999999", "0".repeat(10) + "9".repeat(20)]) {
+        await expectError(await root.api("GET", `/v1/audit?after=${after}`), 400, "invalid_request", "after is not a cursor.");
+      }
     });
 
     test.each(["abc", "-1", "1.5", "1e3", " 1", "0x10"])("after=%s is not a cursor", async (after) => {

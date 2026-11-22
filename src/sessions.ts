@@ -3,6 +3,7 @@ import type { App } from "./app";
 import { newId, randomToken, sha256 } from "./crypto";
 import { emit, emitSessionEnded } from "./events";
 import { clearCookie, fromIssuer, hostCookie, HttpError, setCookie } from "./http";
+import { cut } from "./text";
 
 // SSO sessions at the issuer (docs/DESIGN.md §9.2). The cookie holds 32
 // random bytes and only their SHA-256 is stored. A session lasts 7 days idle
@@ -88,7 +89,7 @@ export async function signInSession(
   client: { ip: string | null; userAgent: string | null },
 ): Promise<{ id: string; token: string }> {
   const token = randomToken();
-  const ua = client.userAgent?.slice(0, 512) ?? null;
+  const ua = client.userAgent === null ? null : cut(client.userAgent, 512);
   if (previous && previous.userId === userId) {
     const rows = await tx`
       UPDATE sessions SET token_hash = ${sha256(token)}, auth_time = now(), amr = ${tx.array(amr, "TEXT")},

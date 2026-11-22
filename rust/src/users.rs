@@ -111,7 +111,8 @@ pub async fn find_user(q: Q<'_>, id: &str) -> Result<Option<UserRow>> {
 /// By username, or by email ignoring case, as typed into a sign-in form.
 pub async fn find_user_by_login(q: Q<'_>, login: &str) -> Result<Option<UserRow>> {
     let value = js_trim(login);
-    if value.is_empty() || utf16_len(value) > 254 {
+    // No username or address holds a NUL, and Postgres's text can't.
+    if value.is_empty() || utf16_len(value) > 254 || value.contains('\0') {
         return Ok(None);
     }
     let row = if value.contains('@') {

@@ -1485,6 +1485,9 @@ describe.skipIf(!enabled)("the self-service API", () => {
         ["an empty string", ""],
         ["month 13", "2030-13-01T00:00:00Z"],
         ["a time without a T", "2030-01-01 00:00:00Z"],
+        ["30 February", "2030-02-30T00:00:00Z"],
+        ["29 February in a common year", "2030-02-29T00:00:00Z"],
+        ["31 April", "2030-04-31T00:00:00Z"],
       ])("expires_at as %s is 400", async (_, value) => {
         const { browser } = await signedIn("badexpiry", { access });
         await expectError(await browser.api("POST", k.path, good({ expires_at: value })), 400, "invalid_request", "expires_at must be an RFC 3339 timestamp.");

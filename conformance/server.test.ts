@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { API_CSP, enabled, rawRequest, rawStatus, SECURITY_HEADERS, Stack } from "./harness";
+import { API_CSP, enabled, rawRequest, rawStatus, SECURITY_HEADERS, Stack, waitFor } from "./harness";
 
 // The server as a process (docs/DESIGN.md §9.2, §9.3, §11): its health check,
 // the headers and error shape of every response, what it logs, and how it
@@ -140,6 +140,49 @@ describe.skipIf(!enabled)("the server process", () => {
         "POST /oauth/token HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/x-www-form-urlencoded\r\nTransfer-Encoding: chunked\r\n\r\n3\r\na=b\r\n0\r\n\r\n",
       );
       expect(statusOf(res)).toBe(401);
+    });
+  });
+
+  describe("the Host header", () => {
+    const get = (host: string | null, version: string) =>
+      raw(stack.port, `GET /healthz?code=abc123 HTTP/${version}\r\n${host === null ? "" : `Host: ${host}\r\n`}Connection: close\r\n\r\n`);
+
+    // A Host that doesn't make a URL with the target: the server can't tell
+    // what was asked for.
+    test.each([
+      ["missing, in HTTP/1.0", null, "1.0"],
+      ["missing, in HTTP/1.1", null, "1.1"],
+      ["empty", "", "1.1"],
+      ["a space", " ", "1.1"],
+      ["a path", "a/b", "1.1"],
+      ["a query", "a?b", "1.1"],
+      ["a fragment", "a#b", "1.1"],
+      ["a user", "a@b", "1.1"],
+      ["a backslash", "a\\b", "1.1"],
+      ["a space inside", "a b", "1.1"],
+      ["a character outside ASCII", "\u00e9.example.com", "1.1"],
+      ["an escaped slash", "a%2Fb", "1.1"],
+      ["a port past 65535", "x:99999", "1.1"],
+      ["a port that isn't a number", "x:abc", "1.1"],
+      ["five numbers", "1.2.3.4.5", "1.1"],
+      ["a number past 255", "256.1.1.1", "1.1"],
+      ["brackets around no address", "[zz]", "1.1"],
+    ] as [string, string | null, string][])("%s is refused bare with 400, the connection closed, and nothing logged", async (_, host, version) => {
+      const before = stack.logs.length;
+      const res = await get(host, version);
+      expect(statusOf(res)).toBe(400);
+      expect(res.split("\r\n\r\n")[1]).toBe("");
+      expect(res.toLowerCase()).toContain("connection: close");
+      // A request after it, whose line marks where the log has got to.
+      await (await fetch(`${stack.url}/nope`)).body?.cancel();
+      await waitFor(() => stack.logs.slice(before).some((l) => l.startsWith("GET unmatched 404")), "the next request's log line");
+      expect(stack.logs.slice(before)).toEqual([expect.stringMatching(/^GET unmatched 404 \d+ms$/)]);
+    });
+
+    test.each([["[::1]"], ["[::1]:80"], ["x:"], ["x:0"], ["%41"], ["UPPER.example.com"], ["_x"], ["x.y."], ["127.0.0.1:1"]])("%s is a host, and the request is served", async (host) => {
+      const res = await get(host, "1.1");
+      expect(statusOf(res)).toBe(200);
+      expect(res.split("\r\n\r\n")[1]).toBe('{"status":"ok"}');
     });
   });
 

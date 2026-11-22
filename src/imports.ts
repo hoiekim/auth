@@ -8,6 +8,7 @@ import type { Service } from "./services";
 import { issueToken } from "./tokens";
 import { transaction } from "./tx";
 import { insertUser, MAX_NAME, USERNAME } from "./users";
+import { cut } from "./text";
 
 // Moving an app's users and API keys into auth (docs/DESIGN.md §12.5, §13).
 // One JSON object per line. Every line is checked before anything is
@@ -54,7 +55,7 @@ function parseLines(text: string, problems: string[]): Line[] {
 }
 
 function unknownFields(line: Line, allowed: string[], p: (msg: string) => void): void {
-  for (const key of Object.keys(line.value)) if (!allowed.includes(key)) p(`unknown field "${key.slice(0, 40)}"`);
+  for (const key of Object.keys(line.value)) if (!allowed.includes(key)) p(`unknown field "${cut(key, 40)}"`);
 }
 
 // RFC 3339 with a zone, as the API takes, and a real calendar date: JS's

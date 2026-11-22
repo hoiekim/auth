@@ -73,7 +73,8 @@ export async function findUser(sql: SQL, id: string): Promise<UserRow | null> {
 // By username, or by email ignoring case, as typed into a sign-in form.
 export async function findUserByLogin(sql: SQL, login: string): Promise<UserRow | null> {
   const value = login.trim();
-  if (value.length === 0 || value.length > 254) return null;
+  // No username or address holds a NUL, and Postgres's text can't.
+  if (value.length === 0 || value.length > 254 || value.includes("\0")) return null;
   const [row] = value.includes("@")
     ? await sql`SELECT * FROM users WHERE lower(email) = lower(${value})`
     : await sql`SELECT * FROM users WHERE username = ${value.toLowerCase()}`;

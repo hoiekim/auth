@@ -541,6 +541,20 @@ describe.skipIf(!enabled)("signing in", () => {
   // -------------------------------------------------------- password sign-in
 
   describe("password sign-in", () => {
+    test("a header's bytes are read one character each, as the Fetch standard reads them", async () => {
+      const user = await stack.user({ username: uname("ua") });
+      const b = stack.browser();
+      // "Zoë" sent as UTF-8: the bytes C3 AB are two characters.
+      const ua = "Zo\u00c3\u00ab-Browser/1.0 \u00ff";
+      const res = await b.request("/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": ua },
+        body: new URLSearchParams({ login: user.username, password: PW, return_to: "/account", csrf: await b.formCsrf() }).toString(),
+      });
+      expect(res.status).toBe(303);
+      expect((await sessionByToken(parseCookie(setCookieOf(res, "auth")).value))?.user_agent).toBe(ua);
+    });
+
     test("by username: the session cookie, the row, the device cookie, the audit row, the redirect", async () => {
       const user = await stack.user({ username: uname("pw") });
       const b = stack.browser();
@@ -648,6 +662,15 @@ describe.skipIf(!enabled)("signing in", () => {
       const email = `${uname("nobody")}@example.com`;
       await (await b.form("/login", { login: email.toUpperCase(), password: "wrong-pw-1" })).body?.cancel();
       expect(await throttleHits(`login:name:${email}`)).toBe(1);
+    });
+
+    test("a login with a NUL is an unknown account, counted with the NUL kept as U+FFFD", async () => {
+      const b = stack.browser();
+      const name = uname("nul");
+      const html = await expectPage(await b.form("/login", { login: `${name}\u0000x`, password: "wrong-pw-1" }), 401, "Sign in");
+      expect(html).toContain(WRONG_LOGIN);
+      expect(await throttleHits(`login:name:${name}\uFFFDx`)).toBe(1);
+      expect(await auditFor("login.fail", null, b.ip)).toHaveLength(1);
     });
 
     test("a missing login or password is a wrong one", async () => {

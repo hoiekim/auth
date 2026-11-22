@@ -138,6 +138,10 @@ pub async fn handle(app: &App, router: &Router, req: Request, ip: Option<String>
                 let allowed: Vec<&str> = route.methods.iter().map(|(m, _)| *m).collect();
                 error_response(405, "method_not_allowed", &format!("Use {}.", allowed.join(" or ")), &[("Allow".to_string(), allowed.join(", "))])
             }
+            // Postgres's text can't hold one, and every list's filters reach it.
+            Some(_) if req.path().starts_with("/v1/") && req.url.query_pairs().any(|(k, v)| k.contains('\0') || v.contains('\0')) => {
+                error_response(400, "invalid_request", "No query parameter may hold a NUL character.", &[])
+            }
             Some((_, handler)) => {
                 let (handler, bare, scope) = (*handler, route.bare, app.clone());
                 // On a task of its own: a handler that panics answers 500 like
@@ -195,10 +199,20 @@ async fn serve_request(app: App, router: Arc<Router>, peer: SocketAddr, req: hyp
     let (parts, body) = req.into_parts();
     let mut headers: Vec<(String, String)> = Vec::with_capacity(parts.headers.len());
     for (name, value) in &parts.headers {
-        headers.push((name.as_str().to_string(), String::from_utf8_lossy(value.as_bytes()).into_owned()));
+        // One character per byte, as the Fetch standard (and so Bun) reads a
+        // header: bytes that are UTF-8 aren't decoded as it.
+        headers.push((name.as_str().to_string(), value.as_bytes().iter().map(|&b| char::from(b)).collect()));
     }
     let header = |name: &str| headers.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str());
+    // The URL is the Host and the target: a Host that isn't one host and
+    // port alone (empty, or with a path, a query, a user, a backslash, a
+    // space or a character outside ASCII, which Bun refuses to make a URL
+    // of) is refused bare, as one that is missing.
     let Some(host) = header("host").or(parts.uri.authority().map(|a| a.as_str())) else { return Ok(refuse(400)) };
+    let bare_host = !host.is_empty() && host.bytes().all(|b| b.is_ascii_graphic() && !matches!(b, b'/' | b'?' | b'#' | b'@' | b'\\'));
+    if !bare_host || Url::parse(&format!("http://{host}/")).is_err() {
+        return Ok(refuse(400));
+    }
     let target = parts.uri.path_and_query().map_or("/", |p| p.as_str());
     let Ok(url) = Url::parse(&format!("http://{host}{target}")) else { return Ok(refuse(400)) };
     let method = parts.method.as_str().to_string();

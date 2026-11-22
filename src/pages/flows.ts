@@ -15,6 +15,7 @@ import { transaction } from "../tx";
 import { findUser, findUserByLogin, insertUser, isUniqueViolation, USERNAME } from "../users";
 import { checkForm, extrasWith, flash, formToken, h, hiddenCsrf, localPath, messagePage, page } from "./layout";
 import { accountKey, completeSignIn } from "./signin";
+import { cut } from "../text";
 
 // The pages around an account's life: sign-up, invitations, activation,
 // password reset and email verification (docs/DESIGN.md U5–U7, A1).
@@ -282,7 +283,7 @@ export async function getReset({ req, deps: app }: Ctx<App>): Promise<Response> 
 export async function postReset({ req, ip, deps: app }: Ctx<App>): Promise<Response> {
   const form = await readForm(req);
   checkForm(app, req, form);
-  const login = (form.get("login") ?? "").trim().slice(0, 254);
+  const login = cut((form.get("login") ?? "").trim(), 254);
   if (form.get("action") === "recovery") return resetWithRecoveryCode(app, req, ip, login, form);
 
   const sent = "If an account uses that name or address, we've sent it a link. It expires in 30 minutes.";
@@ -329,7 +330,7 @@ async function resetWithRecoveryCode(app: App, req: Request, ip: string | null, 
   const wait = await failureWait(app.sql, key);
   if (!wait.allowed) return fail("Too many failed attempts. Try again later.", 429, tooMany(wait));
   const password = form.get("password") ?? "";
-  const code = (form.get("code") ?? "").slice(0, 40);
+  const code = cut(form.get("code") ?? "", 40);
   const live = user && user.kind === "person" && !user.disabled_at ? user : null;
   // The code is proved before anything about the account is told (the
   // password rules read its email), and spent only once everything passes.
@@ -414,7 +415,7 @@ export async function postResetConfirm({ req, ip, deps: app }: Ctx<App>): Promis
     const attempts = await hit(app.sql, `reset:${user.id}:second-factor`, 5, 30 * 60);
     const wait = await failureWait(app.sql, accountKey(user.id));
     if (!attempts.allowed || !wait.allowed) return messagePage(app, 429, "Too many attempts", "Too many wrong codes. Try again later.", back);
-    const code = (form.get("code") ?? "").trim().slice(0, 40);
+    const code = cut((form.get("code") ?? "").trim(), 40);
     let ok = false;
     if (factors.totp) {
       const kind = code ? await checkSecondFactor(app.sql, app, user.id, code) : null;
@@ -491,7 +492,7 @@ export async function postVerifyEmail({ req, ip, deps: app }: Ctx<App>): Promise
 // ------------------------------------------------------------- MFA required
 
 export async function getMfaRequired({ url, deps: app }: Ctx<App>): Promise<Response> {
-  const service = (url.searchParams.get("service") ?? "").slice(0, 64);
+  const service = cut(url.searchParams.get("service") ?? "", 64);
   const returnTo = localPath(url.searchParams.get("return_to"));
   const body = `
 <h1>Two-factor authentication needed</h1>

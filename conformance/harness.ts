@@ -353,7 +353,7 @@ export function rawRequest(port: number, data: string | Uint8Array, waitMs = 200
 }
 
 export function rawStatus(response: string): number {
-  return Number(/^HTTP\/1\.1 (\d{3})/.exec(response)?.[1] ?? 0);
+  return Number(/^HTTP\/1\.[01] (\d{3})/.exec(response)?.[1] ?? 0);
 }
 
 export async function freePort(): Promise<number> {

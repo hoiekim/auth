@@ -9,8 +9,15 @@ pub struct Verdict {
     pub retry_after: i64,
 }
 
+/// A key as stored: text in Postgres can't hold a NUL, and a key can carry
+/// what someone typed (an unknown login), so a NUL is kept as U+FFFD.
+fn stored(key: &str) -> String {
+    key.replace('\0', "\u{FFFD}")
+}
+
 /// A fixed window: `limit` hits per `window_seconds`, counted per key.
 pub async fn hit(q: Q<'_>, key: &str, limit: i32, window_seconds: i64) -> Result<Verdict> {
+    let key = &stored(key);
     let window = window_seconds as f64;
     let row = q
         .one(
@@ -31,6 +38,7 @@ pub async fn hit(q: Q<'_>, key: &str, limit: i32, window_seconds: i64) -> Result
 /// to fifteen minutes. There is no lockout, so nobody can lock another person
 /// out; a success or a reset clears it.
 pub async fn failure_wait(q: Q<'_>, key: &str) -> Result<Verdict> {
+    let key = &stored(key);
     let row = q
         .first(
             "SELECT GREATEST(0, ceil(extract(epoch FROM
@@ -47,6 +55,7 @@ pub async fn failure_wait(q: Q<'_>, key: &str) -> Result<Verdict> {
 }
 
 pub async fn record_failure(q: Q<'_>, key: &str) -> Result<()> {
+    let key = &stored(key);
     q.execute(
         "INSERT INTO throttle AS t (key, window_start, hits) VALUES ($1, now(), 1)
          ON CONFLICT (key) DO UPDATE SET window_start = now(), hits = t.hits + 1",
@@ -57,6 +66,7 @@ pub async fn record_failure(q: Q<'_>, key: &str) -> Result<()> {
 }
 
 pub async fn clear(q: Q<'_>, key: &str) -> Result<()> {
+    let key = &stored(key);
     q.execute("DELETE FROM throttle WHERE key = $1", &[&key]).await?;
     Ok(())
 }
@@ -64,6 +74,7 @@ pub async fn clear(q: Q<'_>, key: &str) -> Result<()> {
 /// True the first time a key is seen: a WebAuthn challenge used once.
 /// Housekeeping drops the row after a day, longer than anything it guards lives.
 pub async fn once(q: Q<'_>, key: &str) -> Result<bool> {
+    let key = &stored(key);
     let rows = q.query("INSERT INTO throttle (key, window_start, hits) VALUES ($1, now(), 1) ON CONFLICT (key) DO NOTHING RETURNING key", &[&key]).await?;
     Ok(rows.len() == 1)
 }
@@ -71,6 +82,7 @@ pub async fn once(q: Q<'_>, key: &str) -> Result<bool> {
 /// The hits counted under a key in its current window, without adding one:
 /// for limits that count failures only.
 pub async fn peek(q: Q<'_>, key: &str, limit: i32, window_seconds: i64) -> Result<Verdict> {
+    let key = &stored(key);
     let window = window_seconds as f64;
     let row = q
         .first(

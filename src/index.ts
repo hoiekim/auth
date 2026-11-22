@@ -39,6 +39,11 @@ const server = Bun.serve({
   // Every body is capped before it is parsed (§10).
   maxRequestBodySize: MAX_BODY_BYTES,
   fetch(req, srv) {
+    // Without a Host that makes a URL (HTTP/1.0 may leave it out; any value
+    // with a path, a user or a character a host can't hold), Bun hands over
+    // only the path: refused bare, as Bun refuses HTTP/1.1 without Host, and
+    // never logged, since the path can carry a secret.
+    if (!URL.canParse(req.url)) return new Response(null, { status: 400, headers: { Connection: "close" } });
     const ip = clientIp(srv.requestIP(req)?.address ?? null, req.headers.get("X-Real-IP"), config.trustedProxies);
     if (!ready && new URL(req.url).pathname !== "/healthz") {
       return errorResponse(503, "temporarily_unavailable", "Starting up.", { "Retry-After": "5" });

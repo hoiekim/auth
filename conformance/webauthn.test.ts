@@ -211,6 +211,8 @@ describe.skipIf(!enabled)("passkeys", () => {
       ["cut to 100 characters", "a".repeat(150), "a".repeat(100)],
       ["200 characters, cut to 100", "b".repeat(200), "b".repeat(100)],
       ["unicode", "Zoë's 李 key", "Zoë's 李 key"],
+      ["cut between characters, never inside one", "a" + "😀".repeat(60), "a" + "😀".repeat(49)],
+      ["of emoji only, cut to 50 of them", "😀".repeat(60), "😀".repeat(50)],
       ["spaces only, so the default", "   ", "Passkey"],
       ["empty, so the default", "", "Passkey"],
       ["null, so the default", null, "Passkey"],
