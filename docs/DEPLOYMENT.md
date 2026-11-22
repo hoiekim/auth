@@ -27,6 +27,19 @@ when it runs. The service reads no `NODE_ENV` at all, and sets
 `development: false` on `Bun.serve` itself, since Bun would otherwise derive
 that from `NODE_ENV`.
 
+**The Rust server's image.** `rust/Dockerfile` builds the other
+implementation of the service (`docs/DESIGN.md` §16), from the repository
+root: `docker build -f rust/Dockerfile .`. Its builder, on
+`rust:1.97.0-slim-bookworm` (the version `rust/rust-toolchain.toml` pins),
+runs the unit tests and compiles one binary from `Cargo.lock`'s exact
+dependencies, with the migrations and assets of `src/` built in; its runtime,
+on `debian:bookworm-slim`, holds that binary alone, owned by root and run as
+`nobody`. `auth` is the server, `auth cli <command>` the break-glass CLI, and
+`auth healthcheck` what its `HEALTHCHECK` runs. Everything else in this
+document holds for both images: the environment, health, stopping, the
+database and the network. CD publishes the Bun image only; a deployment that
+wants the Rust one builds it.
+
 **Health.** `HEALTHCHECK` runs `GET /healthz` every 30 seconds. It answers
 200 when the database answers within two seconds, and 503 otherwise. At
 start the server applies pending migrations under an advisory lock and
@@ -39,7 +52,7 @@ the requests in flight, closes its database pool and exits 0. The `CMD` is
 in exec form, so `bun` is PID 1 and receives the signal. CI's `image` job
 checks this on every PR: it starts the image with a services file, waits for
 its own `HEALTHCHECK` to report healthy, runs the CLI inside it, and stops
-it.
+it. The `rust-image` job does the same for the Rust server's image.
 
 ## 2. Releases
 

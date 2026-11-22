@@ -61,14 +61,34 @@ fn main() -> ExitCode {
     let code = match args.first().map(String::as_str) {
         None => runtime.block_on(serve()),
         Some("cli") => runtime.block_on(cli::main(&args[1..])),
+        Some("healthcheck") => healthcheck(),
         Some(_) => {
-            eprintln!("usage: auth                  run the server\n       auth cli <command>    the break-glass CLI (auth cli help)");
+            eprintln!(
+                "usage: auth                  run the server\n       auth cli <command>    the break-glass CLI (auth cli help)\n       auth healthcheck      exit 0 when the server on PORT is healthy"
+            );
             2
         }
     };
     // Tasks still waiting on a peer that will never answer don't hold the exit.
     runtime.shutdown_timeout(Duration::from_secs(1));
     ExitCode::from(code)
+}
+
+// The image's HEALTHCHECK: asks the server in this container for /healthz, so
+// the image needs no other HTTP client.
+fn healthcheck() -> u8 {
+    use std::io::{Read, Write};
+    let port: u16 = std::env::var("PORT").ok().and_then(|p| p.trim().parse().ok()).unwrap_or(3000);
+    let healthy = || -> std::io::Result<bool> {
+        let mut stream = std::net::TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], port)), Duration::from_secs(5))?;
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+        stream.write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
+        let mut status = [0u8; 12];
+        stream.read_exact(&mut status)?;
+        Ok(&status == b"HTTP/1.1 200")
+    };
+    u8::from(!healthy().unwrap_or(false))
 }
 
 pub fn config_from_environment() -> std::result::Result<config::Config, ConfigError> {
