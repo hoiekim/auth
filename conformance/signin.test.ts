@@ -166,6 +166,12 @@ const REFUSED_RETURN_TO: [string, string | null][] = [
   ["a newline", "/account\nx"],
   ["a tab", "/account\tx"],
   ["a unit separator", "/account\u001fx"],
+  ["a DEL", "/a\u007fb"],
+  // Never in a path the server writes, which comes percent-encoded; raw, it
+  // would go into the Location header raw.
+  ["a character outside ASCII", "/wiki/\u00e9"],
+  ["one outside Latin-1", "/wiki?q=\u65e5\u672c"],
+  ["an emoji", "/\u{1f600}"],
   ["4097 characters", `/${"a".repeat(4096)}`],
 ];
 const ACCEPTED_RETURN_TO: [string, string][] = [
@@ -173,7 +179,8 @@ const ACCEPTED_RETURN_TO: [string, string][] = [
   ["a path with query and fragment", "/account?tab=security&x=1#keys"],
   ["the admin page", "/admin"],
   ["4096 characters", LONG_OK],
-  ["a DEL character", "/a\u007fb"],
+  ["a space", "/a b"],
+  ["every printable ASCII character but a backslash", "/ !\"#$%&'()*+,-./0123456789:;<=>?@AZ[]^_`az{|}~"],
 ];
 
 describe.skipIf(!enabled)("signing in", () => {
@@ -530,7 +537,7 @@ describe.skipIf(!enabled)("signing in", () => {
       expectTag(html, "button", { id: "passkey-signin", "data-return-to": "/account" });
     });
 
-    test.each([...ACCEPTED_RETURN_TO, ["unicode", "/wiki/é?q=日本"], ["markup", `/x?a="<b>'`]] as [string, string][])("return_to %s is kept", async (_, value) => {
+    test.each([...ACCEPTED_RETURN_TO, ["markup", `/x?a="<b>'`]] as [string, string][])("return_to %s is kept", async (_, value) => {
       const { html } = await notices(`?${new URLSearchParams({ return_to: value })}`);
       expectTag(html, "input", { name: "return_to", value });
       expectTag(html, "button", { id: "passkey-signin", "data-return-to": value });
@@ -839,8 +846,7 @@ describe.skipIf(!enabled)("signing in", () => {
       expect(res.headers.get("Location")).toBe("/account");
     });
 
-    // A DEL is left out here: it would go into the Location header raw (see the report).
-    test.each(ACCEPTED_RETURN_TO.filter(([, v]) => !v.includes("\u007f")))("return_to %s is followed", async (_, value) => {
+    test.each(ACCEPTED_RETURN_TO)("return_to %s is followed", async (_, value) => {
       const user = await stack.user({ username: uname("rt") });
       const res = await stack.browser().form("/login", { login: user.username, password: PW, return_to: value });
       expect(res.status).toBe(303);

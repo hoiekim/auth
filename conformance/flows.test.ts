@@ -857,6 +857,8 @@ describe.skipIf(!enabled)("account flows", () => {
       ["expired", async (u: TestUser) => issue("activate", u.id, u.email, { expired: true })],
       ["used", async (u: TestUser) => issue("activate", u.id, u.email, { used: true })],
       ["for another purpose", async (u: TestUser) => issue("reset", u.id, u.email)],
+      ["mailed to an address the account no longer has", async (u: TestUser) => issue("activate", u.id, "former@example.org")],
+      ["mailed to no address", async (u: TestUser) => issue("activate", u.id, null)],
     ])("a token that is %s: 404 Link not valid on GET and POST", async (_, make) => {
       const user = await stack.user({ username: uname("na"), password: null });
       const token = await make(user);
@@ -914,6 +916,8 @@ describe.skipIf(!enabled)("account flows", () => {
       await expectMessage(await stack.browser().form("/activate", { token, password: NEW_PW }), 404, "Link not valid", "This activation link has expired or was already used.");
       expect(await Bun.password.verify(PW, (await userRow(user.id))!.password_hash)).toBe(true);
       expect(await auditFor("user.activate", user.id)).toEqual([]);
+      // Refused, the token is left as it was.
+      expect(await stack.db`SELECT used_at FROM one_time_tokens WHERE user_id = ${user.id} AND purpose = 'activate'`).toEqual([{ used_at: null }]);
     });
 
     test.each([
@@ -921,9 +925,13 @@ describe.skipIf(!enabled)("account flows", () => {
       ["no address", null],
     ])("refused once the account's email is %s, not the token's", async (_, email) => {
       const { user, token } = await pending();
+      const [{ email: sentTo }] = await stack.db`SELECT email FROM users WHERE id = ${user.id}`;
       await stack.db`UPDATE users SET email = ${email} WHERE id = ${user.id}`;
       await expectMessage(await stack.browser().form("/activate", { token, password: NEW_PW }), 404, "Link not valid", "This activation link has expired or was already used.");
       expect((await userRow(user.id))!.password_hash).toBeNull();
+      // Refused, the token is left as it was: with the address back, it works.
+      await stack.db`UPDATE users SET email = ${sentTo} WHERE id = ${user.id}`;
+      expect((await stack.browser().form("/activate", { token, password: NEW_PW })).status).toBe(303);
     });
 
     test("the token's address matches the account's ignoring case", async () => {
@@ -1279,6 +1287,8 @@ describe.skipIf(!enabled)("account flows", () => {
       ["expired", async (u: TestUser) => issue("reset", u.id, u.email, { expired: true })],
       ["used", async (u: TestUser) => issue("reset", u.id, u.email, { used: true })],
       ["for activation", async (u: TestUser) => issue("activate", u.id, u.email)],
+      ["mailed to an address the account no longer has", async (u: TestUser) => issue("reset", u.id, "former@example.org")],
+      ["mailed to no address", async (u: TestUser) => issue("reset", u.id, null)],
     ])("a token that is %s: 404 on GET (with a link to ask again) and on POST", async (_, make) => {
       const u = await stack.user({ username: uname("bad") });
       const token = await make(u);
@@ -1288,6 +1298,17 @@ describe.skipIf(!enabled)("account flows", () => {
       if (token !== null) fields.token = token;
       await expectMessage(await stack.browser().form("/reset/confirm", fields), 404, "Link not valid", "This reset link has expired or was already used.", null);
       expect(await Bun.password.verify(PW, (await userRow(u.id))!.password_hash)).toBe(true);
+    });
+
+    test("a link is good only while the account has the address it was mailed to, in any case", async () => {
+      const u = await stack.user({ username: uname("moved") });
+      const token = await issue("reset", u.id, u.email!.toUpperCase());
+      expect((await stack.browser().get(`/reset/confirm?token=${token}`)).status).toBe(200);
+      await stack.db`UPDATE users SET email = 'elsewhere@example.org' WHERE id = ${u.id}`;
+      await expectMessage(await stack.browser().get(`/reset/confirm?token=${token}`), 404, "Link not valid", "This reset link has expired or was already used.", { href: "/reset", text: "Ask for a new one" });
+      await expectMessage(await stack.browser().form("/reset/confirm", { token, password: NEW_PW }), 404, "Link not valid", "This reset link has expired or was already used.", null);
+      await stack.db`UPDATE users SET email = ${u.email} WHERE id = ${u.id}`;
+      expect((await stack.browser().form("/reset/confirm", { token, password: NEW_PW })).status).toBe(303);
     });
 
     test("POST for a disabled user: 404", async () => {
@@ -1501,7 +1522,7 @@ describe.skipIf(!enabled)("account flows", () => {
       expect((await userRow(u.id))!.email).toBe(u.email);
     });
 
-    test("POST: sets the address, voids the other pending address and reset links, audits; a second use is 404", async () => {
+    test("POST: sets the address, voids the other pending address, reset and activation links, audits; a second use is 404", async () => {
       const u = await stack.user({ username: uname("vp"), emailVerified: false });
       const address = `${uname("Conf")}@Example.org`;
       const token = await issue("verify_email", u.id, address);
@@ -1518,7 +1539,8 @@ describe.skipIf(!enabled)("account flows", () => {
       expect((await auditFor("email.verify", u.id))[0]).toMatchObject({ actor: u.id, ip: b.ip, detail: {} });
       expect((await stack.browser().get(`/verify-email?token=${otherVerify}`)).status).toBe(404);
       expect((await stack.browser().get(`/reset/confirm?token=${reset}`)).status).toBe(404);
-      expect((await stack.browser().get(`/activate?token=${activate}`)).status).toBe(200);
+      // Mailed to the old address, which the account no longer has.
+      expect((await stack.browser().get(`/activate?token=${activate}`)).status).toBe(404);
       expect((await stack.browser().get(`/reset/confirm?token=${theirs}`)).status).toBe(200);
       await expectMessage(await stack.browser().form("/verify-email", { token }), 404, "Link not valid", "This link has expired or was already used.");
     });

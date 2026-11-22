@@ -155,9 +155,13 @@ pub fn local_path(value: Option<&str>) -> String {
     local_path_or(value, "/account")
 }
 
+/// Printable ASCII only, as a path the server writes is: anything else would
+/// go into a Location header raw.
 pub fn local_path_or(value: Option<&str>, fallback: &str) -> String {
     match value {
-        Some(v) if !v.is_empty() && utf16_len(v) <= 4096 && v.starts_with('/') && !v.starts_with("//") && !v.starts_with("/\\") && !v.chars().any(|c| c <= '\u{1f}' || c == '\\') => v.to_string(),
+        Some(v) if !v.is_empty() && utf16_len(v) <= 4096 && v.starts_with('/') && !v.starts_with("//") && !v.starts_with("/\\") && !v.chars().any(|c| !(' '..='~').contains(&c) || c == '\\') => {
+            v.to_string()
+        }
         _ => fallback.to_string(),
     }
 }

@@ -430,13 +430,19 @@ describe.skipIf(!enabled)("OAuth and OIDC", () => {
         await res.body?.cancel();
       }
 
-      test.each(["response_type", "state", "code_challenge", "code_challenge_method", "scope", "nonce", "prompt", "max_age", "login_hint"])(
-        "a repeated %s is invalid_request, without state",
+      test.each(["response_type", "code_challenge", "code_challenge_method", "scope", "nonce", "prompt", "max_age", "login_hint"])(
+        "a repeated %s is invalid_request, with the state sent",
         async (name) => {
           const p = valid({ prompt: "login", max_age: "60", login_hint: "alice" });
-          await expectBack(await go(browser, `${new URLSearchParams(p)}&${name}=${encodeURIComponent(p[name]!)}`), "invalid_request", "A parameter is repeated.", null);
+          await expectBack(await go(browser, `${new URLSearchParams(p)}&${name}=${encodeURIComponent(p[name]!)}`), "invalid_request", "A parameter is repeated.", p.state!);
         },
       );
+
+      test("a repeated state is invalid_request, with no state to send back", async () => {
+        const p = valid();
+        await expectBack(await go(browser, `${new URLSearchParams(p)}&state=other`), "invalid_request", "A parameter is repeated.", null);
+        await expectBack(await go(browser, `${new URLSearchParams(p)}&state=${encodeURIComponent(p.state!)}`), "invalid_request", "A parameter is repeated.", null);
+      });
 
       test("a repeated parameter auth doesn't read is ignored", async () => {
         const res = await go(browser, `${new URLSearchParams(valid())}&foo=1&foo=2`);
@@ -460,7 +466,7 @@ describe.skipIf(!enabled)("OAuth and OIDC", () => {
 
       test("a missing or empty state is invalid_request", async () => {
         await expectBack(await go(browser, without(valid(), "state")), "invalid_request", "state is required.", null);
-        // An empty state is not echoed: it is no state at all.
+        // An empty one goes back as sent.
         const res = await go(browser, valid({ state: "" }));
         expect(res.headers.get("Location")).toBe(back(REDIRECTS.wiki!, { error: "invalid_request", error_description: "state is required.", state: "" }));
       });
@@ -471,7 +477,10 @@ describe.skipIf(!enabled)("OAuth and OIDC", () => {
         expect(loc.searchParams.get("state")).toBe("s".repeat(1024));
         expect(loc.searchParams.get("code")).toMatch(CODE);
         const long = "s".repeat(1025);
-        await expectBack(await go(browser, valid({ state: long })), "invalid_request", "state is required.", long);
+        await expectBack(await go(browser, valid({ state: long })), "invalid_request", "state is at most 1024 characters.", long);
+        // Counted in UTF-16 units, as both servers count every length.
+        await expectBack(await go(browser, valid({ state: "\u{1f600}".repeat(513) })), "invalid_request", "state is at most 1024 characters.", "\u{1f600}".repeat(513));
+        expect(new URL((await go(browser, valid({ state: "\u{1f600}".repeat(512) }))).headers.get("Location")!).searchParams.get("code")).toMatch(CODE);
       });
 
       test("a state with unicode, spaces and reserved characters comes back intact", async () => {
@@ -1704,6 +1713,7 @@ describe.skipIf(!enabled)("OAuth and OIDC", () => {
         ["another issuer", async () => `Bearer ${await forge(claims({ iss: "https://auth.example.com" }))}`],
         ["an audience that is no service", async () => `Bearer ${await forge(claims({ aud: "elsewhere" }))}`],
         ["an audience list", async () => `Bearer ${await forge(claims({ aud: ["wiki"] }))}`],
+        ["auth's own service as the audience, which no client has", async () => `Bearer ${await forge(claims({ aud: "auth" }))}`],
         ["no sub", async () => `Bearer ${await forge(claims({ sub: undefined }))}`],
         ["an unknown sub", async () => `Bearer ${await forge(claims({ sub: newId("usr") }))}`],
         ["a security event token's typ", async () => `Bearer ${await forge(claims(), { typ: "secevent+jwt" })}`],

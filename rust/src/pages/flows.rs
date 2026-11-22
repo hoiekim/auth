@@ -283,11 +283,18 @@ pub async fn post_invite(ctx: Ctx) -> Result<Response> {
 
 // ---------------------------------------------------------------- activation
 
+/// A link's account, while the link is live and the account still has the
+/// address it was mailed to: a link gives nothing to an address the account
+/// no longer has.
 async fn token_user(app: &App, purpose: Purpose, token: Option<&str>) -> Result<Option<UserRow>> {
     match peek_token(app.db(), purpose, token).await? {
-        Some(row) => find_user(app.db(), &row.user_id).await,
+        Some(row) => Ok(find_user(app.db(), &row.user_id).await?.filter(|user| same_address(row.email.as_deref(), user.email.as_deref()))),
         None => Ok(None),
     }
+}
+
+fn same_address(a: Option<&str>, b: Option<&str>) -> bool {
+    matches!((a, b), (Some(a), Some(b)) if a.to_lowercase() == b.to_lowercase())
 }
 
 pub async fn get_activate(ctx: Ctx) -> Result<Response> {
@@ -353,7 +360,15 @@ pub async fn post_activate(ctx: Ctx) -> Result<Response> {
         Ok(true)
     }
     .await;
-    if !tx.finish(work).await? {
+    // Refused, the token is left as it was.
+    let activated = match work {
+        Ok(false) => {
+            tx.rollback().await;
+            false
+        }
+        outcome => tx.finish(outcome).await?,
+    };
+    if !activated {
         return Ok(not_valid());
     }
     Ok(see_other(&format!("/login?{}", form_encode(&[("login_hint", &user.username), ("notice", "activated")])), Extras::default()))
@@ -631,7 +646,7 @@ pub async fn post_reset_confirm(ctx: Ctx) -> Result<Response> {
     let hash = app.hasher.hash(password).await;
     let tx = app.begin().await?;
     let used = consume_token(tx.q(), Purpose::Reset, token).await;
-    if !tx.finish(used).await?.is_some_and(|u| u.user_id == user.id) {
+    if !tx.finish(used).await?.is_some_and(|u| u.user_id == user.id && same_address(u.email.as_deref(), user.email.as_deref())) {
         return Ok(not_valid());
     }
     finish_reset(app, &user, &hash, ctx.ip(), method).await?;

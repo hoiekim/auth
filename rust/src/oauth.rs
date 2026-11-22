@@ -20,7 +20,7 @@ use crate::net::{format_ip, parse_ip};
 use crate::pages::layout::message_page;
 use crate::registry::lock_client;
 use crate::server::Ctx;
-use crate::services::{Client, Service};
+use crate::services::{Client, Service, AUTH_SERVICE};
 use crate::sessions::{clear_session_cookie, end_family, end_session, has_mfa, load_session, lock_family, touch};
 use crate::throttle::{hit, peek};
 use crate::util::{b64url, form_encode, js_trim, now_secs, utf16_len};
@@ -120,21 +120,27 @@ pub async fn authorize(ctx: Ctx) -> Result<Response> {
         }
         Ok(back_to_client(redirect_uri, &params))
     };
+    // Every error goes back with the state as the client sent it, if it sent
+    // one (RFC 6749 §4.1.2.1); a repeated one is no one value to send back.
+    let sent_state = q.single("state").ok().flatten();
     const NAMES: [&str; 9] = ["response_type", "state", "code_challenge", "code_challenge_method", "scope", "nonce", "prompt", "max_age", "login_hint"];
     let mut given: Vec<Option<&str>> = Vec::new();
     for name in NAMES {
         match q.single(name) {
             Ok(v) => given.push(v),
-            Err(_) => return fail(None, "invalid_request", "A parameter is repeated."),
+            Err(_) => return fail(sent_state, "invalid_request", "A parameter is repeated."),
         }
     }
     let [response_type, state, code_challenge, code_challenge_method, scope, nonce, prompt, max_age, login_hint] = given[..] else { unreachable!() };
     if response_type != Some("code") {
         return fail(state, "unsupported_response_type", "Only response_type=code is supported.");
     }
-    let Some(valid_state) = state.filter(|s| !s.is_empty() && utf16_len(s) <= 1024) else {
+    let Some(valid_state) = state.filter(|s| !s.is_empty()) else {
         return fail(state, "invalid_request", "state is required.");
     };
+    if utf16_len(valid_state) > 1024 {
+        return fail(state, "invalid_request", "state is at most 1024 characters.");
+    }
     let challenge = code_challenge.filter(|c| c.len() == 43 && c.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'));
     let (Some(challenge), Some("S256")) = (challenge, code_challenge_method) else {
         return fail(state, "invalid_request", "PKCE is required: code_challenge with code_challenge_method=S256.");
@@ -585,7 +591,9 @@ pub async fn userinfo(ctx: Ctx) -> Result<Response> {
         return unauthorized();
     };
     app.keys.refresh(false, app.db()).await?;
-    let opts = VerifyOptions { typ: "at+jwt", issuer: &app.config.issuer, audience: Some(app.services.all().iter().map(|s| s.name.clone()).collect()), now_seconds: now_secs(), leeway_seconds: 30 };
+    // auth's own service has no clients, so no token is ever made for it.
+    let audience = app.services.all().iter().map(|s| s.name.clone()).filter(|name| name != AUTH_SERVICE).collect();
+    let opts = VerifyOptions { typ: "at+jwt", issuer: &app.config.issuer, audience: Some(audience), now_seconds: now_secs(), leeway_seconds: 30 };
     let Some(claims) = verify_jwt(token, |kid| app.keys.public_key(kid), &opts) else { return unauthorized() };
     let Some(sub) = claims.get("sub").and_then(Value::as_str) else { return unauthorized() };
     let Some(user) = holder(app.db(), sub).await? else { return unauthorized() };
