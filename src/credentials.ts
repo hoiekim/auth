@@ -90,6 +90,10 @@ export async function createCredential(tx: SQL, app: App, c: NewCredential): Pro
     if (typeof c.expiresAt !== "string" || Number.isNaN(Date.parse(c.expiresAt)) || !/^\d{4}-\d\d-\d\dT/.test(c.expiresAt)) {
       throw new HttpError(400, "invalid_request", "expires_at must be an RFC 3339 timestamp.");
     }
+    // A date the calendar doesn't have (30 February) reads as a later one
+    // above; Postgres knows better.
+    const [valid] = await tx`SELECT pg_input_is_valid(${c.expiresAt}, 'timestamptz') AS ok`;
+    if (!valid.ok) throw new HttpError(400, "invalid_request", "expires_at must be an RFC 3339 timestamp.");
     const [future] = await tx`SELECT ${c.expiresAt}::timestamptz > now() AS ok`;
     if (!future.ok) throw new HttpError(400, "invalid_request", "expires_at must be in the future.");
     expiresAt = c.expiresAt;

@@ -82,15 +82,22 @@ export function passwordProblem(password: string, avoid: { username?: string | n
 
 export const BREACHED_MESSAGE = "This password appears in known data breaches. Choose another.";
 
-// Have I Been Pwned's k-anonymity range API: only the first five hex
-// characters of the SHA-1 leave the host, and padding hides how many
-// suffixes came back. A timeout or an error allows the password.
-export async function isBreached(password: string, fetchFn: typeof fetch = fetch, timeoutMs = 2000): Promise<boolean> {
+// Have I Been Pwned's k-anonymity range API, or the deployment's mirror of it.
+export const BREACHED_PASSWORDS_URL = "https://api.pwnedpasswords.com/range";
+
+// Only the first five hex characters of the SHA-1 leave the host, and padding
+// hides how many suffixes came back. A timeout or an error allows the password.
+export async function isBreached(
+  password: string,
+  fetchFn: typeof fetch = fetch,
+  timeoutMs = 2000,
+  rangeUrl = BREACHED_PASSWORDS_URL,
+): Promise<boolean> {
   const sha1 = createHash("sha1").update(password).digest("hex").toUpperCase();
   const prefix = sha1.slice(0, 5);
   const suffix = sha1.slice(5);
   try {
-    const res = await fetchFn(`https://api.pwnedpasswords.com/range/${prefix}`, {
+    const res = await fetchFn(`${rangeUrl}/${prefix}`, {
       headers: { "Add-Padding": "true" },
       signal: AbortSignal.timeout(timeoutMs),
       redirect: "error",

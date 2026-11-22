@@ -8,8 +8,15 @@ export interface Verdict {
   retryAfter: number;
 }
 
+// A key as stored: text in Postgres can't hold a NUL, and a key can carry
+// what someone typed (an unknown login), so a NUL is kept as U+FFFD.
+function stored(key: string): string {
+  return key.replaceAll("\0", "\uFFFD");
+}
+
 // A fixed window: `limit` hits per `windowSeconds`, counted per key.
-export async function hit(sql: SQL, key: string, limit: number, windowSeconds: number): Promise<Verdict> {
+export async function hit(sql: SQL, typed: string, limit: number, windowSeconds: number): Promise<Verdict> {
+  const key = stored(typed);
   const [row] = await sql`
     INSERT INTO throttle AS t (key, window_start, hits) VALUES (${key}, now(), 1)
     ON CONFLICT (key) DO UPDATE SET
@@ -23,7 +30,8 @@ export async function hit(sql: SQL, key: string, limit: number, windowSeconds: n
 // Sign-in failures per account: five, then one attempt a minute, doubling up
 // to fifteen minutes. There is no lockout, so nobody can lock another person
 // out; a success or a reset clears it.
-export async function failureWait(sql: SQL, key: string): Promise<Verdict> {
+export async function failureWait(sql: SQL, typed: string): Promise<Verdict> {
+  const key = stored(typed);
   const [row] = await sql`
     SELECT GREATEST(0, ceil(extract(epoch FROM
              window_start + make_interval(secs => LEAST(60 * power(2, hits - 5), 900)) - now())))::int AS wait
@@ -32,19 +40,21 @@ export async function failureWait(sql: SQL, key: string): Promise<Verdict> {
   return { allowed: wait === 0, retryAfter: wait };
 }
 
-export async function recordFailure(sql: SQL, key: string): Promise<void> {
+export async function recordFailure(sql: SQL, typed: string): Promise<void> {
+  const key = stored(typed);
   await sql`
     INSERT INTO throttle AS t (key, window_start, hits) VALUES (${key}, now(), 1)
     ON CONFLICT (key) DO UPDATE SET window_start = now(), hits = t.hits + 1`;
 }
 
 export async function clear(sql: SQL, ...keys: string[]): Promise<void> {
-  for (const key of keys) await sql`DELETE FROM throttle WHERE key = ${key}`;
+  for (const key of keys) await sql`DELETE FROM throttle WHERE key = ${stored(key)}`;
 }
 
 // True the first time a key is seen: a WebAuthn challenge used once.
 // Housekeeping drops the row after a day, longer than anything it guards lives.
-export async function once(sql: SQL, key: string): Promise<boolean> {
+export async function once(sql: SQL, typed: string): Promise<boolean> {
+  const key = stored(typed);
   const rows = await sql`
     INSERT INTO throttle (key, window_start, hits) VALUES (${key}, now(), 1)
     ON CONFLICT (key) DO NOTHING RETURNING key`;
@@ -57,7 +67,8 @@ export function tooMany(verdict: Verdict): Record<string, string> {
 
 // The hits counted under a key in its current window, without adding one:
 // for limits that count failures only.
-export async function peek(sql: SQL, key: string, limit: number, windowSeconds: number): Promise<Verdict> {
+export async function peek(sql: SQL, typed: string, limit: number, windowSeconds: number): Promise<Verdict> {
+  const key = stored(typed);
   const [row] = await sql`
     SELECT hits, GREATEST(1, ceil(extract(epoch FROM window_start + make_interval(secs => ${windowSeconds}) - now())))::int AS retry_after
     FROM throttle WHERE key = ${key} AND window_start > now() - make_interval(secs => ${windowSeconds})`;

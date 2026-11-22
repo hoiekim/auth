@@ -13,6 +13,8 @@ RUN bun install --frozen-lockfile
 COPY tsconfig.json cli.ts ./
 COPY src src
 COPY client client
+# Typechecked with the rest; its tests need Postgres and a server, and skip here.
+COPY conformance conformance
 
 # The database tests skip here (no TEST_DATABASE_URL); CI runs them, and CD
 # publishes only commits whose CI passed.

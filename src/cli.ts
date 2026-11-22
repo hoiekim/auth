@@ -1,6 +1,7 @@
 import { putAccess } from "./access";
 import { createApp, postAlert, type App } from "./app";
 import { audit } from "./audit";
+import { CLI } from "./cli-name";
 import { retireOldClientSecrets, rotateClientSecret } from "./clients";
 import { ConfigError, loadConfig } from "./config";
 import { connect } from "./db";
@@ -24,7 +25,7 @@ import { checkEmail, checkName, checkUsername, findUserByLogin, insertUser, setD
 
 const ACTOR = "host-cli";
 
-const HELP = `usage: bun cli.ts <command>
+const HELP = `usage: ${CLI} <command>
 
   user create --username <name> --email <address> [--name <name>] [--access <service>:<role>]... [--print-link]
   user create --username <name> --bot --owner <username> [--name <name>] [--access <service>:<role>]...
@@ -128,7 +129,7 @@ async function send(ctx: CliContext, msg: MailMessage, username: string): Promis
     ctx.out(`emailed ${msg.to}`);
   } catch (e) {
     const why = e instanceof Error && e.name === "SmtpError" ? e.message : "error";
-    ctx.out(`the email to ${msg.to} failed (${why}); print a link instead with: bun cli.ts user reset-link ${username} --print-link`);
+    ctx.out(`the email to ${msg.to} failed (${why}); print a link instead with: ${CLI} user reset-link ${username} --print-link`);
   }
 }
 
@@ -156,9 +157,9 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
       const owner = bot ? await userNamed(ctx, one(args, "owner")) : null;
       if (owner && owner.kind !== "person") throw new UsageError("a bot's owner is a person");
       const grants = (args.flags.get("access") ?? []).map((g) => {
-        const [service, role] = g.split(":");
+        const [service, role, ...more] = g.split(":");
         const s = service ? app.services.get(service) : undefined;
-        if (!s || !role || !s.roles.includes(role)) throw new UsageError(`--access ${g}: use <service>:<role> with a role the service declares`);
+        if (!s || !role || more.length > 0 || !s.roles.includes(role)) throw new UsageError(`--access ${g}: use <service>:<role> with a role the service declares`);
         return { service: s, role };
       });
       const { id, token } = await transaction(app.sql, async (tx, after) => {
@@ -246,8 +247,9 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
     if (group === "encryption" && (command === "status" || command === "reencrypt")) {
       if (command === "status") {
         for (const c of await encryptionStatus(app.sql, app.crypt)) {
-          const counts = Object.entries(c.byVersion).map(([v, n]) => `v${v}: ${n}`).join(", ") || "none";
-          ctx.out(`${c.label}: ${counts}${c.unreadable ? ` (${c.unreadable} under a key that isn't configured)` : ""}`);
+          // A value with no version prefix names no key at all.
+          const counts = Object.entries(c.byVersion).map(([v, n]) => (v === "none" ? `no version: ${n}` : `v${v}: ${n}`)).join(", ") || "none";
+          ctx.out(`${c.label}: ${counts}${c.unreadable ? ` (${c.unreadable} no configured key can read)` : ""}`);
         }
         ctx.out(`AUTH_ENCRYPTION_KEY is v${app.crypt.version}`);
         return 0;
@@ -338,7 +340,12 @@ export async function main(argv: string[]): Promise<number> {
       await migrate(sql);
       await rotateKeys(sql, app.crypt);
     }
-    return await runCli(argv, { app, mailer, out: (line) => console.log(line) });
+    try {
+      return await runCli(argv, { app, mailer, out: (line) => console.log(line) });
+    } finally {
+      // Alerts a command's changes raised go out before the process ends.
+      await app.drainAlerts();
+    }
   } finally {
     await sql.close({ timeout: 5 });
   }

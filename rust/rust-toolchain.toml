@@ -1,0 +1,5 @@
+# The toolchain the server is built and checked with: here, in CI, and in
+# rust/Dockerfile's FROM line, which names the same version.
+[toolchain]
+channel = "1.97.0"
+components = ["clippy", "rustfmt"]

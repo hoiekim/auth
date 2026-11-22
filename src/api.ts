@@ -1,6 +1,7 @@
 import { accessJson, deleteAccess, putAccess, roleOf, type AccessRow } from "./access";
 import type { App } from "./app";
 import { audit, clientActor } from "./audit";
+import { CLI } from "./cli-name";
 import { authenticateClient, retireOldClientSecrets, rotateClientSecret } from "./clients";
 import { createCredential, credentialJson, listCredentials, revokeCredential, type CredentialKind } from "./credentials";
 import { ID_PATTERN } from "./crypto";
@@ -32,6 +33,7 @@ import { transaction, type After } from "./tx";
 import { accountKey } from "./pages/signin";
 import { checkEmail, checkName, checkUsername, deleteUser, findUser, insertUser, setDisabled, userJson, type UserRow } from "./users";
 import { isAttachment } from "./webauthn";
+import { cut } from "./text";
 
 // The management API (docs/DESIGN.md §7.5), JSON under /v1. Callers are a
 // signed-in user (the __Host-auth cookie, plus X-CSRF-Token on changes) or a
@@ -208,7 +210,7 @@ export async function changePassword({ req, ip, deps: app }: Ctx<App>): Promise<
   const wait = await failureWait(app.sql, accountKey(user.id));
   if (!wait.allowed) throw new HttpError(429, "rate_limited", "Too many failed attempts.", tooMany(wait));
   if (user.password_hash !== null) {
-    const check = await app.hasher.verify(typeof body.current === "string" ? body.current.slice(0, 1024) : "", user.password_hash);
+    const check = await app.hasher.verify(typeof body.current === "string" ? cut(body.current, 1024) : "", user.password_hash);
     if (!check.ok) {
       await recordFailure(app.sql, accountKey(user.id));
       throw new HttpError(403, "forbidden", "The current password is wrong.");
@@ -286,7 +288,7 @@ export async function postPasskey({ req, ip, deps: app }: Ctx<App>): Promise<Res
     }
     return json(200, await registrationOptions(app, { id: session.userId, username: session.username, name: session.name }, attachment));
   }
-  const name = typeof body.name === "string" && body.name.trim() ? checkName(body.name).slice(0, 100) : "Passkey";
+  const name = typeof body.name === "string" && body.name.trim() ? cut(checkName(body.name), 100) : "Passkey";
   const id = await transaction(app.sql, async (tx, after) => {
     const pk = await finishRegistration(tx, app, session.userId, body.registration, body.response, name);
     if (!pk) return null;
@@ -427,7 +429,7 @@ function credentialRoutes(kind: CredentialKind) {
       const o = await owner(app, req, params, true);
       const ok = await transaction(app.sql, async (tx, after) => {
         const done = await revokeCredential(tx, app, o.userId, kind, params.id!, o.actor, ip);
-        if (done && o.admin) adminAlert(app, after, o.admin, `revoked a ${label} of the bot ${o.bot}`);
+        if (done && o.admin) adminAlert(app, after, o.admin, `revoked an ${label} of the bot ${o.bot}`);
         return done;
       });
       if (!ok) throw new HttpError(404, "not_found", `No such ${label}.`);
@@ -457,7 +459,7 @@ export async function getMyAccess({ req, deps: app }: Ctx<App>): Promise<Respons
 export async function listUsers({ req, url, deps: app }: Ctx<App>): Promise<Response> {
   const c = await caller(app, req, true);
   const { after, limit } = pageParams(url);
-  const q = (url.searchParams.get("q") ?? "").trim().slice(0, 254);
+  const q = cut((url.searchParams.get("q") ?? "").trim(), 254);
   if (c.kind === "client") {
     // A service's client sees only the enabled users with a role on its
     // service, and can't list addresses: an email matches only whole (§7.5).
@@ -854,7 +856,7 @@ function confidentialClient(app: App, id: string): { client: Client; service: Se
   if (client.type !== "confidential") throw new HttpError(409, "conflict", "A public client has no secret.");
   const service = app.services.get(client.service)!;
   if (service.source !== "database") {
-    throw new HttpError(409, "conflict", `${id} is a client of the services file: make its secret with the CLI (bun cli.ts client secret ${id}).`);
+    throw new HttpError(409, "conflict", `${id} is a client of the services file: make its secret with the CLI (${CLI} client secret ${id}).`);
   }
   return { client, service };
 }
@@ -887,17 +889,20 @@ export async function retireOldSecrets({ req, params, ip, deps: app }: Ctx<App>)
   return json(200, { client_id: client.id, retired });
 }
 
+const MAX_BIGINT = 9223372036854775807n;
+
 export async function listAudit({ req, url, deps: app }: Ctx<App>): Promise<Response> {
   const c = await caller(app, req, false);
   requireAdmin(c);
   const { after, limit } = pageParams(url);
-  if (after && !/^\d+$/.test(after)) throw new HttpError(400, "invalid_request", "after is not a cursor.");
+  // An id is a bigint: a cursor past its range is no cursor.
+  if (after && (!/^\d+$/.test(after) || BigInt(after) > MAX_BIGINT)) throw new HttpError(400, "invalid_request", "after is not a cursor.");
   const user = url.searchParams.get("user") ?? "";
-  // Newest first; the cursor is the last id seen.
+  // Newest first, by the id's number; the cursor is the last id seen.
   const rows = await app.sql`
     SELECT id::text AS id, at, actor, action, user_id, host(ip) AS ip, detail FROM audit
-    WHERE (${user} = '' OR user_id = ${user}) AND (${after} = '' OR id < ${after || "0"}::bigint)
-    ORDER BY id DESC LIMIT ${limit + 1}`;
+    WHERE (${user} = '' OR user_id = ${user}) AND (${after} = '' OR audit.id < ${after || "0"}::bigint)
+    ORDER BY audit.id DESC LIMIT ${limit + 1}`;
   return json(
     200,
     listOf(rows as any[], limit, (r) => r.id, (r) => ({

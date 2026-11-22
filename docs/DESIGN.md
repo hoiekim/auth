@@ -329,11 +329,11 @@ sequenceDiagram
 |---|---|
 | `GET /.well-known/openid-configuration` | Discovery. Lists only what is below. `Cache-Control: max-age=3600`. |
 | `GET /.well-known/jwks.json` | Public keys: the current one, plus the next for the day before it signs and the previous for the day after it stops (§9.3). `Cache-Control: max-age=3600`. |
-| `GET /oauth/authorize` | `response_type=code` only. Required: `client_id`, `redirect_uri` (exact string match against the registered list), `state`, `code_challenge` with `S256`, and `nonce` when `scope` has `openid`. Optional: `prompt=none\|login`, `max_age`, `login_hint`. A parameter given twice is refused. `scope` is read only for `openid`: tokens carry §7.3's claims whatever it asks for. A user without a role on the service gets auth's 403 page (§6 rule 1); one whose role is in `mfa_roles` is asked for the second factor, or to enroll one, first. With `prompt=none` these answer `login_required`, `access_denied` and `interaction_required` at the redirect URI instead. |
+| `GET /oauth/authorize` | `response_type=code` only. Required: `client_id`, `redirect_uri` (exact string match against the registered list), `state` (at most 1024 characters), `code_challenge` with `S256`, and `nonce` when `scope` has `openid`. Optional: `prompt=none\|login`, `max_age`, `login_hint`. A parameter given twice is refused. An error sent back to the redirect URI carries `state` as the client sent it, whenever it sent one (RFC 6749 §4.1.2.1). `scope` is read only for `openid`: tokens carry §7.3's claims whatever it asks for. A user without a role on the service gets auth's 403 page (§6 rule 1); one whose role is in `mfa_roles` is asked for the second factor, or to enroll one, first. With `prompt=none` these answer `login_required`, `access_denied` and `interaction_required` at the redirect URI instead. |
 | `POST /oauth/token` | Grants: `authorization_code` and `refresh_token`. Confidential clients use `client_secret_basic`. Public clients use `none` and PKCE. Redeeming a code answers with an ID token; a refresh doesn't, and for a public client it carries the rotated refresh token. |
 | `POST /oauth/revoke` | RFC 7009. Accepts the caller's own refresh tokens, and answers `200` whether or not it knew the token. A confidential client's call revokes that token. A public client's ends the token's whole family and sends `session.ended` (§7.4): the app is signing a device out. |
 | `POST /oauth/introspect` | RFC 7662, client-authenticated. Checks an **API key or app password**, never a JWT (apps verify those locally). Answers `active: true` only when the credential's service is the caller's, the credential is unexpired and unrevoked, and its owner is enabled and holds a role on that service. Removing someone from a service stops their keys and app passwords for it too. An active answer carries `sub`, `username`, `scope`, the owner's current `role` on that service, and `jti`, the credential's id, so a client can drop its cached answer on `credential.revoked`. |
-| `GET` / `POST /oauth/userinfo` | OIDC userinfo, for clients that expect it: `sub`, `username`, `preferred_username` (the same value), `name`, `email` and `email_verified`, for a valid access token of any service, and otherwise `401 invalid_token`. The client in §7.6 doesn't use it. |
+| `GET` / `POST /oauth/userinfo` | OIDC userinfo, for clients that expect it: `sub`, `username`, `preferred_username` (the same value), `name`, `email` and `email_verified`, for a valid access token of any service but auth's own (which no client has, so none is ever made), and otherwise `401 invalid_token`. The client in §7.6 doesn't use it. |
 | `GET /logout` | RP-initiated logout. `post_logout_redirect_uri` is optional; when given, it must be registered for the `client_id` that comes with it, and gets `state` back. Without one, auth shows its own "signed out" page. |
 
 Not implemented, on purpose: implicit and hybrid flows, the password grant, `client_credentials` (service-to-service access uses bot users, §12.7), dynamic registration, consent screens (every client is registered by the deployment), request objects, PAR, DPoP and mTLS.
@@ -503,6 +503,10 @@ auth.logoutUrl(postLogoutRedirect?)
 - **JSON field names are `snake_case`**, as OAuth's are.
 - **One error shape everywhere, OAuth's:** `{"error": "<code>", "error_description": "<text>"}`. Codes: `invalid_request` 400, `unauthorized` 401, `forbidden` 403, `reauth_required` 403, `not_found` 404, `method_not_allowed` 405 (with `Allow`), `conflict` 409, `rate_limited` 429 (with `Retry-After`), `invalid_grant`, `invalid_client` and `unsupported_grant_type` 400/401 per RFC 6749, `invalid_token` 401 per RFC 6750 (userinfo), `server_error` 500, `temporarily_unavailable` 503.
 - **Lists:** `{"items": […], "next": "<cursor>" | null}`. The lists that can grow long (users, invites, audit) take `?after=<cursor>&limit=` (default 50, at most 100); the others answer everything at once, with `next: null`.
+- **No NUL in a `/v1/` query parameter:** Postgres's text can't hold one, so it is `400 invalid_request`.
+- **A request whose `Host` doesn't make a URL** (missing, or with a path, a user or a character a host can't hold) is answered `400` with no body and the connection closed, and isn't logged: its path can carry a secret.
+- **A body is framed one way:** by a `Content-Length` (repeated only with the same value), or by chunked coding alone, without trailers. Any other framing is answered `400` with no body; the one exception, a length beside chunked coding, is in §16. A method auth doesn't know (of letters and dashes) closes the connection unanswered; one with other characters is `400`.
+- **A `return_to` is a local path of printable ASCII**, as every path auth writes is; anything else leads to `/account`.
 - **IDs** are prefixed by type: `usr_`, `ses_`, `apw_`, `key_`, `inv_`, `evt_`, `pk_` (passkeys). Timestamps are RFC 3339 UTC.
 - **Versioning:** the path is `/v1`. Additive changes don't bump it, and clients ignore unknown fields.
 
@@ -732,7 +736,7 @@ CREATE UNLOGGED TABLE throttle (                      -- shared across every cop
 - **Hashing:** argon2id with m = 19 MiB, t = 2, p = 1 (OWASP's minimum), through `Bun.password`.
   - Measured under Bun 1.4.4: **70 ms to hash, 45 ms to verify** on one core.
   - Bun's default is 64 MiB, a 64 MB container's whole limit, so set the parameters explicitly and **run one hash at a time** (a semaphore). The other requests queue, which caps hashing memory at 19 MiB. On half a CPU a second slot would add no throughput: two hashes would share the same half core and each would take twice as long.
-- **Policy** (NIST SP 800-63B): 12–256 characters with no composition rules. Reject passwords found in Have I Been Pwned's k-anonymity range API: only 5 hex characters of the SHA-1 leave the host, and a timeout or any other failure to reach it allows the password. Reject the username and the email as passwords.
+- **Policy** (NIST SP 800-63B): 12–256 characters with no composition rules. Reject passwords found in Have I Been Pwned's k-anonymity range API, or in the deployment's mirror of it (`BREACHED_PASSWORDS_URL`): only 5 hex characters of the SHA-1 leave the host, and a timeout or any other failure to reach it allows the password. Reject the username and the email as passwords.
 - **Unknown users** cost the same as known ones: verify against a dummy hash.
 
 **TOTP**
@@ -752,6 +756,7 @@ CREATE UNLOGGED TABLE throttle (                      -- shared across every cop
 **Recovery email**
 - Must be verified. A sign-up or a change sets the address only once its confirmation link is used, so neither can take, or reveal, an address another account uses: that address's owner gets a notice instead.
 - Changing it emails the old address, and the new one gets a confirmation link.
+- A reset or activation link works only while the account has the address it was mailed to, and one made without an address (the CLI's `--print-link`, for an account that has none) only while the account still has none. A refused one isn't spent.
 - A reset link ends all sessions and refresh tokens and needs the second factor if one is enrolled: a TOTP code, a passkey, or a recovery code. A user who has lost the second factor uses a recovery code, or an admin clears it (A5).
 
 **App passwords and API keys**
@@ -818,6 +823,7 @@ Counters live in the `throttle` table, so every copy shares them and a restart d
 | A recovery code outside a sign-in (the U6 reset) | the per-account and per-IP sign-in limits above |
 | Emails from sign-up, the reset page, a change of one's own email, and invitations | 3 per hour per address, and 10 per hour per sender: the IP on auth's pages, the signed-in user or the app's client on the API; the answer is the same whether or not the address exists. The activation and reset links an `auth:admin` sends aren't counted. |
 | Account creation (sign-up on an open service, a new account from an invitation, or, once platform sign-in is built, a first platform sign-in, §12.3) | 10 per hour per IP |
+| A request, on any connection | A head of at most 16 KiB and 198 headers (`431` past either), a body of at most 64 KiB (`413`), and about 10 seconds to send a request, or between requests on a kept connection, after which the connection is closed unanswered. HTTP/1.0 gets one answer per connection. |
 | `/oauth/token` per client | 60 per minute |
 | `/oauth/introspect` per client | 600 per minute. Failures are counted per client (1000 an hour) and per end-user address the client names (10 per 15 minutes; the exception above), so a protocol server's brute-force limits stay effective. Past either, the answer is `429`. A back channel through the proxy arrives with the proxy's `X-Real-IP`, the client's own address; that one keys no per-address counter, which would put all the client's users in one bucket. |
 
@@ -835,11 +841,11 @@ Counters live in the `throttle` table, so every copy shares them and a restart d
 | CSRF and clickjacking | §9.2 |
 | Cookie tossing from a sibling subdomain | `__Host-` cookies at auth and in every app |
 | A compromised app | It can mint nothing, read nothing of auth's beyond its own service's users, and change access only for its own service. Rotate its client secret. |
-| A compromised auth image | Every integrated app falls. So: no runtime dependencies; an image run by digest (§11), either the deployment's own reviewed pin or the digest CD's run posts to its deploy hook, so that pushing over a tag changes nothing (a hook that pulls `latest` gives this up, and makes the registry credential as sensitive as merge rights); MFA on `auth:admin`; and an alert on every access change for `auth` and on every break-glass use. |
+| A compromised auth image | Every integrated app falls. So: no runtime dependencies in the Bun server, a short reviewed list in the Rust one (§16); an image run by digest (§11), either the deployment's own reviewed pin or the digest CD's run posts to its deploy hook, so that pushing over a tag changes nothing (a hook that pulls `latest` gives this up, and makes the registry credential as sensitive as merge rights); MFA on `auth:admin`; and an alert on every access change for `auth` and on every break-glass use. |
 | Database read by a third party | §9.3 |
 | An app password sent before TLS on a password-only protocol | The server refuses AUTH before TLS on every port (§12.4) |
 | A malicious admin, or a mistake | Audit log, an alert on admin actions, A5 needing an out-of-band check. A change to a service, which can add a redirect URI and make a secret, needs a recent sign-in with a second factor, and its alert names each redirect URI it adds; a service in the services file is out of an admin's reach while the file declares it, and a held copy that takes over once the file no longer does is alerted (§6.2). |
-| Account takeover through the recovery email | Old-address notice on change, second factor still required after a reset, 30-minute single-use links |
+| Account takeover through the recovery email | Old-address notice on change, second factor still required after a reset, 30-minute single-use links that work only for the address they were mailed to |
 
 ### 9.6 Availability and break-glass
 
@@ -893,7 +899,7 @@ Every change the CLI makes to users, access, client secrets, encryption or impor
   - 64 MB and half a CPU (§10).
   - Two copies may run side by side during a deploy, so every piece of state lives in Postgres (§8).
   - A `HEALTHCHECK` on `/healthz`. SIGTERM finishes requests in flight and exits.
-- **Configuration**, all of it the deployment's own: the listen port (`PORT`, default 3000), the issuer URL (`ISSUER_URL`), an optional services file (§6.2, `SERVICES_FILE`), `DATABASE_URL`, `AUTH_ENCRYPTION_KEY` and, during a rotation, `AUTH_DECRYPTION_KEYS` (§9.3), the API key prefix (`API_KEY_PREFIX`), the trusted proxies (`TRUSTED_PROXIES`), the SMTP server for its emails (`SMTP_URL`, `EMAIL_FROM`), the audit retention (`AUDIT_RETENTION_DAYS`, default 1 year), whether people may delete their own accounts (U14; `ALLOW_ACCOUNT_DELETION`, default no), and an optional alert webhook (`ALERT_WEBHOOK_URL`). Secrets come from the environment, never from the image or the database (§9.3).
+- **Configuration**, all of it the deployment's own: the listen port (`PORT`, default 3000), the issuer URL (`ISSUER_URL`), an optional services file (§6.2, `SERVICES_FILE`), `DATABASE_URL`, `AUTH_ENCRYPTION_KEY` and, during a rotation, `AUTH_DECRYPTION_KEYS` (§9.3), the API key prefix (`API_KEY_PREFIX`), the trusted proxies (`TRUSTED_PROXIES`), the SMTP server for its emails (`SMTP_URL`, `EMAIL_FROM`), the audit retention (`AUDIT_RETENTION_DAYS`, default 1 year), whether people may delete their own accounts (U14; `ALLOW_ACCOUNT_DELETION`, default no), an optional alert webhook (`ALERT_WEBHOOK_URL`), and the range API the breached-password check asks (§9.1; `BREACHED_PASSWORDS_URL`, default the public one). Secrets come from the environment, never from the image or the database (§9.3).
 - **No app depends on auth to start.** Apps fetch keys lazily and keep serving signed-in users while auth is down (§9.6).
 - **Database.** Postgres 16: a database and a role of auth's own, the database owned by that role, `CONNECT` revoked from `PUBLIC`, and `pg_hba.conf` allowing the role only from the network auth runs on. No app's role can connect to it.
 - **Break-glass CLI.** Runs inside a running container (§9.6).
@@ -1015,7 +1021,7 @@ Both imports are all or nothing: every line is checked first, every problem is l
 
 **The cost of building it** is owning security-critical code. That is contained by:
 - the narrow scope (§7.2's "not implemented" list);
-- no runtime dependencies: Bun's built-ins cover SQL, HTTP and crypto, and WebAuthn verification is auth's own (§9.1);
+- no runtime dependencies in the Bun server: Bun's built-ins cover SQL, HTTP and crypto, and WebAuthn verification is auth's own (§9.1); the Rust server has a short list of widely used crates in their place (§16);
 - standard formats, so off-the-shelf conformance tests apply (the OpenID Foundation's Basic OP test plan);
 - review on every change (`docs/agents/auth-reviewer.md`).
 
@@ -1023,3 +1029,89 @@ Both imports are all or nothing: every line is checked first, every problem is l
 
 1. **Federation with outside identity providers** (sign in with an existing OIDC provider) is a non-goal for v1. What would make it a goal?
 2. **Groups shared across services** (a group such as "Support" that several apps give roles to) are a non-goal; an app's own groups are its own (§12.6). What signal would show that shared groups are needed: the same people granted the same roles in several apps, again and again?
+
+## 16. Implementations
+
+The service is written twice, to the one contract this document is:
+
+- `src/`: TypeScript on Bun, with no runtime dependencies (§14). Its
+  break-glass CLI is `bun cli.ts`.
+- `rust/`: Rust, one binary. `auth` serves, `auth cli <command>` is the
+  break-glass CLI (§9.6), and `auth healthcheck` is its image's health check.
+
+**Either server, one deployment.** Both read the same environment (§11) and
+services file, and use the same database: the migrations in
+`src/migrations` and the pages' assets in `src/assets` are the one copy
+each applies and serves (the Rust binary has them built in). Everything
+either stores or hands out has one format: the password hashes (§9.1), the
+ciphertexts with their key versions (§9.3), sealed cookies and CSRF tokens
+(§9.2), signing keys and tokens (§7.3), the SHA-256 lookups, and the
+advisory-lock and rate-limit keys. Copies of each can run side by side on
+one database, so a deployment moves from one to the other, and back, with
+an ordinary rolling deploy.
+
+**Held to the same behaviour.** `conformance/` starts a server as a process
+and reaches it only over HTTP, SMTP, the CLI and Postgres, so the same tests
+run against either (`AUTH_BACKEND`): statuses, error texts, headers,
+cookies, redirects, pages, rows, audit entries, events, emails, alerts and
+log lines. `conformance/mixed.test.ts` runs a copy of each on one database,
+both ways. Some of the Bun server's behaviour comes from its runtime rather
+than from `src/`: how `DATABASE_URL` is read (`docs/DEPLOYMENT.md` §3:
+which parameters are the client's, which go to Postgres, `sslmode`, the
+`PG*` variables), which TLS certificates are accepted (OpenSSL's rules), and
+how JSON and CBOR text are read (`JSON.parse`, `TextDecoder`).
+The Rust server reproduces those too. `rust/tests/database_urls.json`
+records Bun's reading of each case, CI checks that the Bun it runs still
+reads them so, and the Rust server's tests check its own reading against
+them. A change to behaviour is made in both, with a test both pass.
+
+**Dependencies.** The Rust server has no runtime's built-ins to lean on, so
+it has crates in their place. These are all of `rust/Cargo.toml`'s, which
+change together with this list:
+
+| What Bun gives the Bun server | Crates |
+|---|---|
+| The async runtime and HTTP/1.1 server | tokio, hyper, hyper-util, http-body-util, bytes |
+| SQL and the pool of §10 | tokio-postgres, deadpool-postgres |
+| TLS, to Postgres, the SMTP server and HTTPS | rustls, tokio-rustls, tokio-postgres-rustls, webpki-roots (the bundled public roots), rustls-native-certs (the host's) |
+| Outbound HTTPS | reqwest |
+| Ed25519, AES-GCM, HKDF, HMAC, SHA-1 and SHA-2 | ring |
+| Password hashes (§9.1) | argon2, bcrypt |
+| Passkeys' ES256 | p256 |
+| Dates, JSON, URLs and their encodings | chrono, serde_json, url, form_urlencoded, percent-encoding, base64 |
+
+`Cargo.lock` pins every one, and what they pull in, and the image builds
+with `--locked`. A deployment that runs the Rust image trusts that list where
+§9.5 has the Bun image trust none.
+
+**What a deployment sees differ.**
+- The CLI's name, in its commands and in the messages that name it.
+- The image: `rust/Dockerfile` builds one binary onto `debian:bookworm-slim`,
+  run as `nobody`, its `HEALTHCHECK` `auth healthcheck`. CD publishes the
+  Bun image only (`docs/DEPLOYMENT.md`).
+- Memory. Measured alike, with no limit, around five rounds of 40
+  concurrent password sign-ins: the Rust server's RSS was 9 MiB at rest and
+  31 MiB after, 22 MiB of it anonymous, mostly the one 19 MiB argon2id
+  work area it keeps for the next hash; the Bun server's was 40 MiB at rest
+  and 92 MiB after (58 MiB anonymous), 53 MiB a few seconds later.
+- A `.env` file: Bun reads one in its working directory; the Rust server
+  reads its environment alone.
+- In `DATABASE_URL`: `prepare=false`, which turns off the Bun client's
+  prepared statements, is read past by the Rust server, which always
+  prepares; and the Rust server can't read an `sslkey` encrypted under
+  `sslpassword`, or reach a Unix socket not named `.s.PGSQL.<port>`. In TLS: a
+  certificate issued by a trusted CA but itself marked as a CA is accepted
+  by the Bun server and refused by the Rust one.
+- Where the HTTP parsers differ underneath (§9.4's limits and §7.7's
+  framing hold for both): requests pipelined into one packet go unanswered
+  by the Bun server and are answered in order by the Rust one; an HTTP
+  version other than 1.0 or 1.1, or lines ended by a bare LF, are `505`
+  from the Bun server, where the Rust server answers `400` to the version
+  and reads the bare LF; a DEL in a header value is read by the Bun server
+  and `400` from the Rust one; an HTTP/2 preface is `400` from the Bun
+  server and closed unanswered by the Rust one; and a body with both a
+  `Content-Length` and chunked coding is `400` from the Bun server, while
+  the Rust server reads it chunked and closes the connection after
+  answering, which leaves nothing on it to smuggle. The Bun server's
+  timeout ticks every few seconds, so it closes a stalled connection after
+  8 to 13 seconds; the Rust server after 10.

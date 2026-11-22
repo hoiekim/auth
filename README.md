@@ -54,6 +54,28 @@ Phases 1 to 3 of [`docs/DESIGN.md`](docs/DESIGN.md) §13 are built:
 Phase 4, platform sign-in through token exchange (§12.3), is designed but
 not built, as §3 decides for v1.
 
+## Two servers
+
+The service is written twice, side by side (`docs/DESIGN.md` §16):
+
+- [`src/`](src): TypeScript on Bun, with no runtime dependencies. Its image
+  is [`Dockerfile`](Dockerfile); its break-glass CLI is `bun cli.ts`.
+- [`rust/`](rust): Rust. Its image is [`rust/Dockerfile`](rust/Dockerfile);
+  its break-glass CLI is `auth cli`.
+
+Both implement the same design, read the same configuration, and use the same
+database: the migrations in `src/migrations` and the pages' assets in
+`src/assets` are the one copy each applies and serves. What one writes the
+other reads, so a deployment can move from one to the other, and back, with an
+ordinary rolling deploy.
+
+[`conformance/`](conformance) holds them to the same behaviour: tests that
+start a server as a process and reach it only over HTTP, SMTP, the CLI and
+Postgres, so the same files run against either
+(`AUTH_BACKEND=bun`, the default, or `rust`), and
+[`conformance/mixed.test.ts`](conformance/mixed.test.ts) runs a copy of each
+on one database.
+
 ## Configuration
 
 Configuration comes from the environment only. The server refuses to start
@@ -77,12 +99,14 @@ deployment.
 | `AUDIT_RETENTION_DAYS` | no | `365` | Days of audit log kept |
 | `ALLOW_ACCOUNT_DELETION` | no | `false` | Whether people may delete their own accounts |
 | `ALERT_WEBHOOK_URL` | no | — | Webhook that receives alerts as `{"text": …}` |
+| `BREACHED_PASSWORDS_URL` | no | `https://api.pwnedpasswords.com/range` | The range API the breached-password check asks, for a deployment that mirrors it |
 | `TEST_DATABASE_URL` | tests only | — | A Postgres the database tests use; each test file makes and drops a schema of its own, and they skip without it |
+| `AUTH_BACKEND` | tests only | `bun` | Which server `conformance/` starts: `bun` or `rust` |
 
 ## Development
 
 Requires Bun 1.4.4, the version `packageManager` in `package.json` pins, and
-Postgres 16.
+Postgres 16; the Rust server also needs rustup.
 
 ```sh
 bun install
@@ -91,6 +115,24 @@ bun run dev             # restarts on change
 bun run typecheck
 TEST_DATABASE_URL=postgres://auth:auth@localhost:5432/auth bun test
 ```
+
+The Rust server needs the toolchain `rust/rust-toolchain.toml` pins, which
+rustup installs by itself:
+
+```sh
+set -a; . ./.env; set +a            # it reads no .env file of its own
+cd rust
+cargo run --release                 # the server, configured by the same environment
+cargo run --release -- cli help     # its break-glass CLI
+cargo fmt --check && cargo clippy --release -- -D warnings && cargo test --release
+cd ..
+TEST_DATABASE_URL=postgres://auth:auth@localhost:5432/auth bun run test:rust   # builds it, then runs conformance/ against it
+bun rust/tests/database_urls.ts --check   # Bun still reads each DATABASE_URL case as recorded
+```
+
+`bun test` runs `conformance/` against the Bun server, with the unit tests.
+Once the Rust server is built, `conformance/mixed.test.ts` also starts a copy
+of it beside the server under test.
 
 `SMTP_URL` may point at a local mail catcher on a loopback port without TLS.
 The first admin comes from the CLI, which prints an activation link:
@@ -112,8 +154,9 @@ bun cli.ts help
    before it.
 3. **Open a PR against `main`.** Start the description with a
    `## Design alignment` section naming the sections it implements or
-   changes, then a summary. CI (typecheck; tests against Postgres; the image
-   built, started and stopped) must be green.
+   changes, then a summary. CI (typecheck; tests against Postgres; for the
+   Rust server, format, lint, unit tests and the conformance suite; each
+   image built, started and stopped) must be green.
 4. **Migrations are expand-only.** Never edit or drop an applied migration;
    add a new one. During a deploy the previous image runs against the new
    schema.
@@ -129,6 +172,13 @@ bun cli.ts help
    that integrate with auth: they reach it through standard, configurable
    interfaces, never through knowledge of a particular deployment
    (`docs/DESIGN.md` §2).
+
+7. **One behaviour, two servers.** A change to what the service does is made
+   in `src/` and in `rust/` in the same PR, with a test in `conformance/`
+   that both pass: status, error text, headers, what is written to the
+   database, events, emails and CLI output. A format either server stores or
+   hands out (a hash, a ciphertext, a sealed cookie, a token) changes in both
+   at once, or not at all: the other must read it during a deploy.
 
 Code review by agents follows [`AGENTS.md`](AGENTS.md).
 

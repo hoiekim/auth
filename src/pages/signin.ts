@@ -11,6 +11,7 @@ import { clear, failureWait, hit, recordFailure, tooMany } from "../throttle";
 import { transaction } from "../tx";
 import { findUser, findUserByLogin } from "../users";
 import { checkForm, extrasWith, flash, formToken, h, hiddenCsrf, icon, localPath, messagePage, page } from "./layout";
+import { cut } from "../text";
 
 // Signing in (docs/DESIGN.md §7.1, §9.1, §9.4): a password, then TOTP or a
 // recovery code when the account has TOTP; or a passkey, which is two
@@ -75,7 +76,7 @@ export async function getLogin({ req, url, deps: app }: Ctx<App>): Promise<Respo
   const returnTo = localPath(q.get("return_to"));
   const service = q.get("second_factor");
   const notice = service
-    ? `Your role on ${service.slice(0, 64)} needs a second factor: sign in with your password and authenticator code, or with a passkey.`
+    ? `Your role on ${cut(service, 64)} needs a second factor: sign in with your password and authenticator code, or with a passkey.`
     : q.get("reauth")
       ? "Sign in again to continue."
       : q.get("notice") === "activated"
@@ -83,14 +84,15 @@ export async function getLogin({ req, url, deps: app }: Ctx<App>): Promise<Respo
         : q.get("notice") === "reset"
           ? "Your password is changed. Sign in."
           : undefined;
-  return loginForm(app, req, { returnTo, login: q.get("login_hint")?.slice(0, 254), notice });
+  const hint = q.get("login_hint");
+  return loginForm(app, req, { returnTo, login: hint === null ? undefined : cut(hint, 254), notice });
 }
 
 export async function postLogin({ req, ip, deps: app }: Ctx<App>): Promise<Response> {
   const form = await readForm(req);
   checkForm(app, req, form);
   const returnTo = localPath(form.get("return_to"));
-  const login = (form.get("login") ?? "").trim().slice(0, 254);
+  const login = cut((form.get("login") ?? "").trim(), 254);
   const password = form.get("password") ?? "";
   const again = (error: string, status = 400, headers?: Record<string, string>) => {
     const res = loginForm(app, req, { returnTo, login, error, status });
@@ -109,7 +111,7 @@ export async function postLogin({ req, ip, deps: app }: Ctx<App>): Promise<Respo
   if (!wait.allowed) return again(`Too many failed attempts. Try again in ${minutes(wait.retryAfter)}.`, 429, tooMany(wait));
 
   const usable = user && user.kind === "person" ? user.password_hash : null;
-  const check = await app.hasher.verify(password.slice(0, 1024), usable);
+  const check = await app.hasher.verify(cut(password, 1024), usable);
   if (!check.ok || !user) {
     await recordFailure(app.sql, key);
     await audit(app.sql, { actor: null, action: "login.fail", userId: user?.id ?? null, ip, detail: { method: "password" } });
@@ -177,7 +179,7 @@ export async function postSecondFactor({ req, ip, deps: app }: Ctx<App>): Promis
     res.headers.append("Set-Cookie", clearCookie(PENDING));
     return res;
   }
-  const kind = await checkSecondFactor(app.sql, app, pending.u, (form.get("code") ?? "").slice(0, 40));
+  const kind = await checkSecondFactor(app.sql, app, pending.u, cut(form.get("code") ?? "", 40));
   if (!kind) {
     await recordFailure(app.sql, accountKey(pending.u));
     await audit(app.sql, { actor: null, action: "login.mfa_fail", userId: pending.u, ip });
@@ -243,7 +245,7 @@ export async function completeSignIn(
       if (user.email) after(() => app.mail(securityNotice(user.email!, user.username, "a recovery code was used")));
     }
     if (history.logins > 0 && history.on_device === 0 && user.email) {
-      const detail = `Browser: ${(userAgent ?? "unknown").slice(0, 200)}${ip ? `\nAddress: ${ip}` : ""}`;
+      const detail = `Browser: ${cut(userAgent ?? "unknown", 200)}${ip ? `\nAddress: ${ip}` : ""}`;
       after(() => app.mail(securityNotice(user.email!, user.username, "a sign-in from a new device", detail)));
     }
     return s;

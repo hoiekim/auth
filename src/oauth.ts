@@ -13,7 +13,7 @@ import { parseIp, formatIp } from "./net";
 import { lockClient } from "./registry";
 import { messagePage } from "./pages/layout";
 import type { Ctx } from "./server";
-import type { Client, Service } from "./services";
+import { AUTH_SERVICE, type Client, type Service } from "./services";
 import { clearSessionCookie, endFamily, endSession, hasMfa, loadSession, lockFamily, touch } from "./sessions";
 import { hit, peek, tooMany } from "./throttle";
 import { transaction } from "./tx";
@@ -96,7 +96,14 @@ export async function authorize({ req, url, ip, deps: app }: Ctx<App>): Promise<
   }
   const service = app.services.get(client.service)!;
 
-  let state: string | null = null;
+  // Every error goes back with the state as the client sent it, if it sent
+  // one (RFC 6749 §4.1.2.1); a repeated one is no one value to send back.
+  let state: string | null;
+  try {
+    state = single(q, "state");
+  } catch {
+    state = null;
+  }
   const fail = (error: string, description: string) =>
     backToClient(redirectUri, { error, error_description: description, ...(state !== null ? { state } : {}) });
   const names = ["response_type", "state", "code_challenge", "code_challenge_method", "scope", "nonce", "prompt", "max_age", "login_hint"] as const;
@@ -106,9 +113,9 @@ export async function authorize({ req, url, ip, deps: app }: Ctx<App>): Promise<
   } catch {
     return fail("invalid_request", "A parameter is repeated.");
   }
-  state = params.state ?? null;
   if (params.response_type !== "code") return fail("unsupported_response_type", "Only response_type=code is supported.");
-  if (!state || state.length > 1024) return fail("invalid_request", "state is required.");
+  if (!state) return fail("invalid_request", "state is required.");
+  if (state.length > 1024) return fail("invalid_request", "state is at most 1024 characters.");
   if (!params.code_challenge || !CHALLENGE.test(params.code_challenge) || params.code_challenge_method !== "S256") {
     return fail("invalid_request", "PKCE is required: code_challenge with code_challenge_method=S256.");
   }
@@ -458,7 +465,11 @@ export async function userinfo({ req, deps: app }: Ctx<App>): Promise<Response> 
   const claims = verifyJwt(m[1], (kid) => app.keys.publicKey(kid), {
     typ: "at+jwt",
     issuer: app.config.issuer,
-    audience: app.services.all().map((s) => s.name),
+    // auth's own service has no clients, so no token is ever made for it.
+    audience: app.services
+      .all()
+      .map((s) => s.name)
+      .filter((name) => name !== AUTH_SERVICE),
     nowSeconds: Math.floor(Date.now() / 1000),
   });
   if (!claims || typeof claims.sub !== "string") return unauthorized();

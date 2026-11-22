@@ -27,6 +27,28 @@ interface LoadedKey {
 
 const CACHE_MS = 60_000;
 
+// A signing key whose stored public half can't be used: named, so the start
+// says which key, instead of blaming the database. A kid is public.
+export class UnreadableKeyError extends Error {
+  override name = "UnreadableKeyError";
+  constructor(readonly kid: string) {
+    super(`signing key ${kid} has an unreadable public key`);
+  }
+}
+
+// An Ed25519 public key as this service writes one: an object, OKP, Ed25519,
+// and 32 bytes of x in base64url.
+function publicKeyOf(kid: string, jwk: unknown): KeyObject {
+  const j = jwk as Record<string, unknown> | null;
+  const usable = typeof j === "object" && j !== null && !Array.isArray(j) && j.kty === "OKP" && j.crv === "Ed25519" && typeof j.x === "string" && /^[A-Za-z0-9_-]{43}$/.test(j.x);
+  if (!usable) throw new UnreadableKeyError(kid);
+  try {
+    return createPublicKey({ key: j as unknown as PublicJwk, format: "jwk" });
+  } catch {
+    throw new UnreadableKeyError(kid);
+  }
+}
+
 export class KeyStore {
   #published: LoadedKey[] = [];
   #signerKid: string | null = null;
@@ -64,7 +86,7 @@ export class KeyStore {
       return {
         kid: r.kid,
         jwk: r.public_jwk,
-        publicKey: createPublicKey({ key: r.public_jwk, format: "jwk" }),
+        publicKey: publicKeyOf(r.kid, r.public_jwk),
         sealed: Buffer.from(r.private_key_enc),
         privateKey: null,
       };

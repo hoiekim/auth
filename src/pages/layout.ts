@@ -132,7 +132,9 @@ export function checkForm(app: App, req: Request, form: URLSearchParams): void {
 // A path on this site to go to after a step, never another origin.
 export function localPath(value: string | null | undefined, fallback = "/account"): string {
   if (!value || value.length > 4096 || !value.startsWith("/") || value.startsWith("//") || value.startsWith("/\\")) return fallback;
-  if (/[\u0000-\u001f\\]/.test(value)) return fallback;
+  // Printable ASCII only, as a path the server writes is: anything else would
+  // go into a Location header raw.
+  if (/[^\u0020-\u007e]|\\/.test(value)) return fallback;
   return value;
 }
 

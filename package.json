@@ -9,7 +9,8 @@
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "test:rust": "cargo build --release --locked --manifest-path rust/Cargo.toml && AUTH_BACKEND=rust bun test conformance"
   },
   "devDependencies": {
     "@types/bun": "^1.4.2",

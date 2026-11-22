@@ -12,9 +12,10 @@ import { endUserSessions, loadSession } from "../sessions";
 import { clear, failureWait, hit, recordFailure, tooMany } from "../throttle";
 import { consumeToken, emailAllowed, issueToken, peekToken } from "../tokens";
 import { transaction } from "../tx";
-import { findUser, findUserByLogin, insertUser, isUniqueViolation, USERNAME } from "../users";
+import { findUser, findUserByLogin, insertUser, isUniqueViolation, USERNAME, type UserRow } from "../users";
 import { checkForm, extrasWith, flash, formToken, h, hiddenCsrf, localPath, messagePage, page } from "./layout";
 import { accountKey, completeSignIn } from "./signin";
+import { cut } from "../text";
 
 // The pages around an account's life: sign-up, invitations, activation,
 // password reset and email verification (docs/DESIGN.md U5–U7, A1).
@@ -199,9 +200,8 @@ export async function postInvite({ req, ip, deps: app }: Ctx<App>): Promise<Resp
 
 export async function getActivate({ req, url, deps: app }: Ctx<App>): Promise<Response> {
   const token = url.searchParams.get("token");
-  const row = await peekToken(app.sql, "activate", token);
-  const user = row ? await findUser(app.sql, row.user_id) : null;
-  if (!row || !user) return messagePage(app, 404, "Link not valid", "This activation link has expired or was already used. Ask an administrator for a new one.");
+  const user = await tokenUser(app, "activate", token);
+  if (!user) return messagePage(app, 404, "Link not valid", "This activation link has expired or was already used. Ask an administrator for a new one.");
   const { token: csrf, cookie } = formToken(req);
   const body = `
 <h1>Activate your account</h1>
@@ -217,30 +217,52 @@ export async function getActivate({ req, url, deps: app }: Ctx<App>): Promise<Re
   return page(app, "Activate your account", body, { extras: extrasWith(cookie) });
 }
 
+// A link's account, while the link is live and the account still has the
+// address it was mailed to: a link gives nothing to an address the account
+// no longer has. One made with no address (the CLI's --print-link, for an
+// account without one) holds while the account still has none.
+async function tokenUser(app: App, purpose: "activate" | "reset", token: string | null): Promise<UserRow | null> {
+  const row = await peekToken(app.sql, purpose, token);
+  const user = row ? await findUser(app.sql, row.user_id) : null;
+  return row && user && sameAddress(row.email, user.email) ? user : null;
+}
+
+function sameAddress(a: string | null, b: string | null): boolean {
+  return a === null || b === null ? a === b : a.toLowerCase() === b.toLowerCase();
+}
+
+// Thrown to roll a transaction back when it finds its change can't be made.
+const REFUSED = Symbol("refused");
+
 export async function postActivate({ req, ip, deps: app }: Ctx<App>): Promise<Response> {
   const form = await readForm(req);
   checkForm(app, req, form);
   const token = form.get("token");
-  const row = await peekToken(app.sql, "activate", token);
-  const user = row ? await findUser(app.sql, row.user_id) : null;
-  if (!row || !user) return messagePage(app, 404, "Link not valid", "This activation link has expired or was already used.");
+  const user = await tokenUser(app, "activate", token);
+  if (!user) return messagePage(app, 404, "Link not valid", "This activation link has expired or was already used.");
   const password = form.get("password") ?? "";
   const problem = await newPasswordProblem(app, password, { username: user.username, email: user.email });
   if (problem) return messagePage(app, 400, "Choose another password", problem, { href: `/activate?${new URLSearchParams({ token: token ?? "" })}`, text: "Back" });
   const hash = await app.hasher.hash(password);
-  const ok = await app.sql.begin(async (tx) => {
-    const used = await consumeToken(tx, "activate", token);
-    if (!used) return false;
-    // Only for the address it was sent to, and only before the account has a
-    // password: after that, a reset (with its second factor) is the way in.
-    const set = await tx`
-      UPDATE users SET password_hash = ${hash}, email_verified_at = now(), updated_at = now()
-      WHERE id = ${used.user_id} AND password_hash IS NULL AND email IS NOT NULL AND lower(email) = lower(${used.email ?? ""})
-      RETURNING 1`;
-    if (set.length === 0) return false;
-    await audit(tx, { actor: used.user_id, action: "user.activate", userId: used.user_id, ip });
-    return true;
-  });
+  const ok = await app.sql
+    .begin(async (tx) => {
+      const used = await consumeToken(tx, "activate", token);
+      if (!used) return false;
+      // Only for the address it was sent to, and only before the account has a
+      // password: after that, a reset (with its second factor) is the way in.
+      const set = await tx`
+        UPDATE users SET password_hash = ${hash}, email_verified_at = now(), updated_at = now()
+        WHERE id = ${used.user_id} AND password_hash IS NULL AND email IS NOT NULL AND lower(email) = lower(${used.email ?? ""})
+        RETURNING 1`;
+      // Refused, the token is left as it was.
+      if (set.length === 0) throw REFUSED;
+      await audit(tx, { actor: used.user_id, action: "user.activate", userId: used.user_id, ip });
+      return true;
+    })
+    .catch((e: unknown) => {
+      if (e === REFUSED) return false;
+      throw e;
+    });
   if (!ok) return messagePage(app, 404, "Link not valid", "This activation link has expired or was already used.");
   return redirect(`/login?${new URLSearchParams({ login_hint: user.username, notice: "activated" })}`);
 }
@@ -282,7 +304,7 @@ export async function getReset({ req, deps: app }: Ctx<App>): Promise<Response> 
 export async function postReset({ req, ip, deps: app }: Ctx<App>): Promise<Response> {
   const form = await readForm(req);
   checkForm(app, req, form);
-  const login = (form.get("login") ?? "").trim().slice(0, 254);
+  const login = cut((form.get("login") ?? "").trim(), 254);
   if (form.get("action") === "recovery") return resetWithRecoveryCode(app, req, ip, login, form);
 
   const sent = "If an account uses that name or address, we've sent it a link. It expires in 30 minutes.";
@@ -329,7 +351,7 @@ async function resetWithRecoveryCode(app: App, req: Request, ip: string | null, 
   const wait = await failureWait(app.sql, key);
   if (!wait.allowed) return fail("Too many failed attempts. Try again later.", 429, tooMany(wait));
   const password = form.get("password") ?? "";
-  const code = (form.get("code") ?? "").slice(0, 40);
+  const code = cut(form.get("code") ?? "", 40);
   const live = user && user.kind === "person" && !user.disabled_at ? user : null;
   // The code is proved before anything about the account is told (the
   // password rules read its email), and spent only once everything passes.
@@ -362,9 +384,8 @@ async function finishReset(app: App, userId: string, username: string, email: st
 
 export async function getResetConfirm({ req, url, deps: app }: Ctx<App>): Promise<Response> {
   const token = url.searchParams.get("token");
-  const row = await peekToken(app.sql, "reset", token);
-  const user = row ? await findUser(app.sql, row.user_id) : null;
-  if (!row || !user) return messagePage(app, 404, "Link not valid", "This reset link has expired or was already used.", { href: "/reset", text: "Ask for a new one" });
+  const user = await tokenUser(app, "reset", token);
+  if (!user) return messagePage(app, 404, "Link not valid", "This reset link has expired or was already used.", { href: "/reset", text: "Ask for a new one" });
   const factors = await factorsOf(app.sql, user.id);
   const { token: csrf, cookie } = formToken(req);
   const second = factors.totp
@@ -397,9 +418,8 @@ export async function postResetConfirm({ req, ip, deps: app }: Ctx<App>): Promis
   checkForm(app, req, form);
   const token = form.get("token");
   const back = { href: `/reset/confirm?${new URLSearchParams({ token: token ?? "" })}`, text: "Back" };
-  const row = await peekToken(app.sql, "reset", token);
-  const user = row ? await findUser(app.sql, row.user_id) : null;
-  if (!row || !user || user.disabled_at) return messagePage(app, 404, "Link not valid", "This reset link has expired or was already used.");
+  const user = await tokenUser(app, "reset", token);
+  if (!user || user.disabled_at) return messagePage(app, 404, "Link not valid", "This reset link has expired or was already used.");
 
   // Checked before the second factor, so a refused password doesn't spend a
   // code.
@@ -414,7 +434,7 @@ export async function postResetConfirm({ req, ip, deps: app }: Ctx<App>): Promis
     const attempts = await hit(app.sql, `reset:${user.id}:second-factor`, 5, 30 * 60);
     const wait = await failureWait(app.sql, accountKey(user.id));
     if (!attempts.allowed || !wait.allowed) return messagePage(app, 429, "Too many attempts", "Too many wrong codes. Try again later.", back);
-    const code = (form.get("code") ?? "").trim().slice(0, 40);
+    const code = cut((form.get("code") ?? "").trim(), 40);
     let ok = false;
     if (factors.totp) {
       const kind = code ? await checkSecondFactor(app.sql, app, user.id, code) : null;
@@ -440,7 +460,7 @@ export async function postResetConfirm({ req, ip, deps: app }: Ctx<App>): Promis
   }
   const hash = await app.hasher.hash(password);
   const used = await app.sql.begin((tx) => consumeToken(tx, "reset", token));
-  if (!used || used.user_id !== user.id) return messagePage(app, 404, "Link not valid", "This reset link has expired or was already used.");
+  if (!used || used.user_id !== user.id || !sameAddress(used.email, user.email)) return messagePage(app, 404, "Link not valid", "This reset link has expired or was already used.");
   await finishReset(app, user.id, user.username, user.email, hash, ip, method === "email+recovery_code" ? "recovery_code" : method);
   return redirect(`/login?${new URLSearchParams({ login_hint: user.username, notice: "reset" })}`);
 }
@@ -491,7 +511,7 @@ export async function postVerifyEmail({ req, ip, deps: app }: Ctx<App>): Promise
 // ------------------------------------------------------------- MFA required
 
 export async function getMfaRequired({ url, deps: app }: Ctx<App>): Promise<Response> {
-  const service = (url.searchParams.get("service") ?? "").slice(0, 64);
+  const service = cut(url.searchParams.get("service") ?? "", 64);
   const returnTo = localPath(url.searchParams.get("return_to"));
   const body = `
 <h1>Two-factor authentication needed</h1>

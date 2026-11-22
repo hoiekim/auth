@@ -7,3 +7,8 @@ node_modules
 # Not needed to build or run
 docs
 *.md
+
+# Build output; the Rust image compiles its own. Its toolchain is the image's
+# (rust/Dockerfile's FROM line), so rustup has nothing to fetch.
+rust/target
+rust/rust-toolchain.toml

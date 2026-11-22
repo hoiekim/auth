@@ -93,6 +93,9 @@ export async function handle<D extends ServerDeps & Preparing<D>>(
       if (!handler) {
         const allowed = Object.keys(found.route.methods);
         res = errorResponse(405, "method_not_allowed", `Use ${allowed.join(" or ")}.`, { Allow: allowed.join(", ") });
+      } else if (url.pathname.startsWith("/v1/") && [...url.searchParams].some(([k, v]) => k.includes("\0") || v.includes("\0"))) {
+        // Postgres's text can't hold one, and every list's filters reach it.
+        res = errorResponse(400, "invalid_request", "No query parameter may hold a NUL character.");
       } else {
         const scoped = found.route.bare || !deps.prepare ? deps : await deps.prepare();
         res = await handler({ req, url, params: found.params, ip, deps: scoped });

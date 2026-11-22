@@ -27,6 +27,19 @@ when it runs. The service reads no `NODE_ENV` at all, and sets
 `development: false` on `Bun.serve` itself, since Bun would otherwise derive
 that from `NODE_ENV`.
 
+**The Rust server's image.** `rust/Dockerfile` builds the other
+implementation of the service (`docs/DESIGN.md` §16), from the repository
+root: `docker build -f rust/Dockerfile .`. Its builder, on
+`rust:1.97.0-slim-bookworm` (the version `rust/rust-toolchain.toml` pins),
+runs the unit tests and compiles one binary from `Cargo.lock`'s exact
+dependencies, with the migrations and assets of `src/` built in; its runtime,
+on `debian:bookworm-slim`, holds that binary alone, owned by root and run as
+`nobody`. `auth` is the server, `auth cli <command>` the break-glass CLI, and
+`auth healthcheck` what its `HEALTHCHECK` runs. Everything else in this
+document holds for both images: the environment, health, stopping, the
+database and the network. CD publishes the Bun image only; a deployment that
+wants the Rust one builds it.
+
 **Health.** `HEALTHCHECK` runs `GET /healthz` every 30 seconds. It answers
 200 when the database answers within two seconds, and 503 otherwise. At
 start the server applies pending migrations under an advisory lock and
@@ -39,7 +52,7 @@ the requests in flight, closes its database pool and exits 0. The `CMD` is
 in exec form, so `bun` is PID 1 and receives the signal. CI's `image` job
 checks this on every PR: it starts the image with a services file, waits for
 its own `HEALTHCHECK` to report healthy, runs the CLI inside it, and stops
-it.
+it. The `rust-image` job does the same for the Rust server's image.
 
 ## 2. Releases
 
@@ -102,7 +115,7 @@ bearer token.
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `PORT` | no | `3000` (the image sets it) | HTTP listen port |
-| `DATABASE_URL` | yes | — | Postgres connection string for the auth database |
+| `DATABASE_URL` | yes | — | Postgres connection string for the auth database: TLS and other parameters below |
 | `ISSUER_URL` | yes | — | The issuer: the https origin browsers and apps reach auth at, with no path. It is every token's `iss` and the passkeys' RP ID, so changing it signs everyone out and invalidates every passkey. |
 | `SERVICES_FILE` | no | none | Path to a services file inside the container (below) |
 | `AUTH_ENCRYPTION_KEY` | yes | — | 32 random bytes, base64 (`openssl rand -base64 32`), optionally written `v<N>:<base64>` to give it a version (a bare key is version 1). Encrypts signing keys and TOTP secrets at rest. Keep a copy offline: a restored backup is useless without it. |
@@ -114,10 +127,49 @@ bearer token.
 | `AUDIT_RETENTION_DAYS` | no | `365` | Days of audit log kept; lower it under a shorter retention rule |
 | `ALLOW_ACCOUNT_DELETION` | no | `false` | `true` lets people delete their own accounts (U14), for example where a store requires it |
 | `ALERT_WEBHOOK_URL` | no | — | An http(s) URL that receives `{"text": "…"}` on every change an `auth:admin` makes through the administration endpoints (`docs/DESIGN.md` §7.5), which the admin page calls; every change to who administers auth; every change the break-glass CLI makes to users, access, secrets, encryption or imported data; a held copy of a service taking effect; a reused refresh token; and every event given up (after 24 hours, or at its next attempt once its service has no `events_url`) |
+| `BREACHED_PASSWORDS_URL` | no | `https://api.pwnedpasswords.com/range` | The range API the breached-password check asks (`docs/DESIGN.md` §9.1), as `<URL>/<five hex characters of the SHA-1>`: an http(s) URL without credentials, a query or a fragment. A deployment sets it to its own mirror of the public API. |
 
 Secrets (`DATABASE_URL`, `AUTH_ENCRYPTION_KEY` and `AUTH_DECRYPTION_KEYS`, the password in `SMTP_URL`,
 a token in `ALERT_WEBHOOK_URL`) come from the deployment's secret store into
 the environment, never from the image or the database.
+
+### Connecting to Postgres
+
+`DATABASE_URL` is `postgres://user:password@host:port/database`, with
+anything in it percent-encoded, and these query parameters:
+
+- **`sslmode`**, for TLS to Postgres: `disable`, the default, never asks
+  for it; `prefer` (or `allow`) takes it when the server offers it;
+  `require` insists on it. None of these three checks the server's
+  certificate. `verify-ca` checks that it chains to a trusted root, and
+  `verify-full` that it also names the host. Anything else refuses the
+  start.
+- **`sslrootcert=<file>`** makes that PEM file the only root trusted, and
+  means `verify-full` unless `sslmode` says `verify-ca`; it can be the
+  server's own self-signed certificate, made as Postgres's documentation
+  shows (`openssl req -x509 …`). `sslrootcert=system` checks against the
+  usual roots instead: the public ones, the host's store, `SSL_CERT_FILE`,
+  and the PEM file `NODE_EXTRA_CA_CERTS` names, which is where a private CA
+  goes. A certificate with no DNS names may name the host in its common
+  name. A file that can't be read fails each connection, not the start.
+- **`sslcert=<file>&sslkey=<file>`** shows a client certificate, and asks
+  for TLS.
+- **`application_name`**, and any other parameter that isn't the client's
+  own (`statement_timeout=5000`, `search_path=…`), goes to Postgres as a
+  setting for every connection.
+- `connect_timeout` (seconds, default 30, `0` for none), `idle_timeout` and
+  `max_lifetime` (seconds) for the pool's connections; `channel_binding`
+  (`disable`, the default, `prefer` or `require`); and `host`, `port`,
+  `user`, `password` and `dbname`, which win over the URL's own.
+  libpq's keywords for its own connection (`keepalives`,
+  `target_session_attrs` and the like) are read past.
+
+What the URL leaves out comes from `PGHOST`, `PGPORT`, `PGUSER`,
+`PGPASSWORD`, `PGSSLMODE`, `PGAPPNAME`, `PGOPTIONS`, `PGCONNECT_TIMEOUT` and
+`PGCHANNELBINDING`; `PGDATABASE`, though, wins over the URL's database. A
+host that is a directory (`?host=/var/run/postgresql`) is a Unix socket,
+where there is no TLS. Over any network the deployment doesn't control,
+use `verify-full`.
 
 ### Services
 
@@ -255,7 +307,8 @@ No app's role can connect to the `auth` database.
   deployment has one, or over HTTPS otherwise; browsers reach auth through the
   proxy.
 - Outbound, auth reaches the SMTP server, the alert webhook, each service's
-  `events_url`, and `https://api.pwnedpasswords.com` for the
+  `events_url`, and `https://api.pwnedpasswords.com`, or the mirror
+  `BREACHED_PASSWORDS_URL` names, for the
   breached-password check (`docs/DESIGN.md` §9.1). That check allows the
   password when the API can't be reached, so blocking it turns the check
   off without an error.

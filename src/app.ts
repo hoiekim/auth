@@ -27,8 +27,11 @@ export interface App extends ServerDeps {
   mail: (msg: MailMessage) => void;
   // Settles once every queued email has been sent or has failed.
   drainMail: () => Promise<void>;
-  // Posts to the deployment's alert webhook, when it has one.
+  // Posts to the deployment's alert webhook, when it has one, after the
+  // caller's response.
   alert: (text: string) => void;
+  // Settles once every alert posted has been answered or has failed.
+  drainAlerts: () => Promise<void>;
   hasher: Hasher;
   breached: (password: string) => Promise<boolean>;
 }
@@ -46,6 +49,7 @@ export function createApp(config: Config, sql: SQL, mailer: Mailer, overrides: A
   const crypt = new Encrypter(config.encryptionKey, config.decryptionKeys);
   const queue = mailQueue(mailer, log);
   const registry = new ServiceRegistry(sql, config.services, log);
+  const alerts = webhookAlert(config.alertWebhookUrl, fetchFn, log);
   const app: App = {
     config,
     services: config.services,
@@ -58,9 +62,10 @@ export function createApp(config: Config, sql: SQL, mailer: Mailer, overrides: A
     keys: new KeyStore(sql, crypt),
     mail: queue.send,
     drainMail: queue.drain,
-    alert: webhookAlert(config.alertWebhookUrl, fetchFn, log),
+    alert: alerts.send,
+    drainAlerts: alerts.drain,
     hasher: new Hasher(),
-    breached: overrides.breached ?? ((pw) => isBreached(pw, fetchFn)),
+    breached: overrides.breached ?? ((pw) => isBreached(pw, fetchFn, 2000, config.breachedPasswordsUrl)),
     pingDatabase: databasePing(sql, 2000),
     log,
   };
@@ -115,7 +120,16 @@ export async function postAlert(url: string, fetchFn: typeof fetch, log: (line: 
   }
 }
 
-export function webhookAlert(url: string | null, fetchFn: typeof fetch, log: (line: string) => void): (text: string) => void {
-  if (!url) return () => {};
-  return (text) => void postAlert(url, fetchFn, log, text);
+export function webhookAlert(url: string | null, fetchFn: typeof fetch, log: (line: string) => void): { send: (text: string) => void; drain: () => Promise<void> } {
+  const inFlight = new Set<Promise<void>>();
+  return {
+    send(text) {
+      if (!url) return;
+      const posting: Promise<void> = postAlert(url, fetchFn, log, text).finally(() => inFlight.delete(posting));
+      inFlight.add(posting);
+    },
+    async drain() {
+      await Promise.allSettled([...inFlight]);
+    },
+  };
 }
