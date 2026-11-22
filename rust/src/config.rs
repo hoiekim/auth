@@ -71,7 +71,10 @@ pub fn load_config(env: &dyn Fn(&str) -> Option<String>, read_file: &dyn Fn(&str
         problems.push("DATABASE_URL is required".into());
     } else if !(database_url.starts_with("postgres://") || database_url.starts_with("postgresql://")) {
         problems.push("DATABASE_URL must be a postgres:// or postgresql:// URL".into());
-    } else if !parses_as_database_url(&database_url) {
+    } else if crate::pgurl::parse(&database_url, env).is_err() {
+        // Read as the pool will read it, environment included, so what it
+        // can't use is reported with the other problems instead of failing
+        // the start after them. Not echoed: it can hold a password.
         problems.push("DATABASE_URL is not a well-formed URL".into());
     }
 
@@ -252,13 +255,4 @@ fn parse_issuer(raw: &str, problems: &mut Vec<String>) -> String {
             String::new()
         }
     }
-}
-
-// What the pool can't use is reported with the other problems instead of
-// failing the start after them: the port, a percent-escape, sslmode, a
-// timeout. It opens no connection.
-fn parses_as_database_url(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    let escapes_ok = (0..bytes.len()).filter(|i| bytes[*i] == b'%').all(|i| bytes.get(i + 1..i + 3).is_some_and(|h| h.iter().all(u8::is_ascii_hexdigit)));
-    escapes_ok && value.parse::<tokio_postgres::Config>().is_ok_and(|c| c.get_ports().iter().all(|p| *p != 0)) && crate::db::parses_as_database_url(value)
 }

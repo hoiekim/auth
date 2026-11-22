@@ -6,6 +6,8 @@ You are reviewing code in `auth` on the maintainer's behalf. Your job is to flag
 
 It is a product, not a deployment (`docs/DESIGN.md` §2, §O below). It serves kinds of app, not particular apps: web apps, servers for password-only protocols, APIs, native apps, and apps that manage their own members. Which apps a deployment connects is that deployment's configuration.
 
+The service is written twice (`docs/DESIGN.md` §16): `src/` on Bun and `rust/` in Rust, sharing `src/migrations` and `src/assets`, each able to read what the other writes, and held to the same behaviour by `conformance/`, which runs against either server as a process (`AUTH_BACKEND=bun|rust`). Both are in scope for every rule below.
+
 The token claims, the event payloads, the error shape, the management API and `client/auth-client.ts` are published contracts. Apps this repo has never heard of depend on them, so a change is reviewed against the contract in `docs/DESIGN.md` §7, not against any one app.
 
 **Severity calibrates up here.** A defect in auth is a defect in every app that integrates with it. A bypass of any credential, session, token or access check is HIGH even when only one path is affected, and so is any secret reaching a log or a response.
@@ -110,6 +112,7 @@ For every line the diff DELETES or replaces, name the invariant it enforced. Sea
 - **Fixtures must discriminate.** If the right and wrong implementations return the same value on your test data, the guard is decorative. Mutation-test the assertion that matters: break the specific line a new test claims to protect (delete the check, flip the comparison, log the raw value), re-run, confirm red, restore. Then `git status --short` empty before reporting.
 - **A secret-absence assertion needs a secret to be absent.** A test that checks a log or a response carries no secret must first push a recognisable secret through the path (`s3cret-pw`, `abc123` in the existing tests); asserting "no password in the log" when no password was ever in reach proves nothing.
 - **Anchored positive assertions over negative ones that forbid one spelling.** A negative regex over generated output enumerates spellings of the defect — the mutant class that matters is *additions*, not substitutions.
+- **One behaviour, two servers.** A change to what the service does, in `src/` or in `rust/`, comes with the same change in the other and a test in `conformance/` that both pass; run it both ways (`bun test conformance/<file>` and `AUTH_BACKEND=rust bun test conformance/<file>`, the Rust server built) and report both counts. A change to a format either stores or hands out (a hash, a ciphertext, a sealed cookie, a token) lands in both at once, and `conformance/mixed.test.ts` still passes. A conformance test that asserts something incidental (JSON key order, header case, HTML whitespace, timings, the error name in a log line) or names the CLI literally instead of through `CLI` is a finding: it fails the other server for nothing. Where the Bun server's behaviour comes from its runtime rather than `src/` (how `DATABASE_URL` is read, which TLS certificates pass), `rust/tests/database_urls.ts` records Bun's answers; a change there regenerates `database_urls.json` and keeps `rust/src/pgurl.rs` agreeing.
 - **Never substring-match a number in an assertion.** `expect(s.contains("count 5"))` passes against `"count 50"`. Extract with a capture and compare whole values.
 
 ### E. Language / framework pitfalls (TypeScript on Bun)
@@ -121,6 +124,12 @@ For every line the diff DELETES or replaces, name the invariant it enforced. Sea
 - **`crypto.timingSafeEqual` throws on inputs of different lengths.** Compare fixed-length digests (SHA-256 of both sides), never raw user input against a stored secret; a `try` around it that returns `false` on the throw reintroduces the length side channel.
 - **`Bun.password.hash` defaults to argon2id with 64 MiB.** One sign-in at the default takes a 64 MB container's whole limit. Every call passes DESIGN.md §9.1's parameters explicitly and runs behind the hashing semaphore.
 - **`mock.module` in `bun:test` is process-global** and leaks into every later test file in the run. Use injected fakes (`ServerDeps` and its successors); a diff that reaches for `mock.module` instead is a finding.
+
+### E2. Language pitfalls (Rust)
+
+- **JavaScript's semantics, where the Bun code relies on them.** A length limit counts UTF-16 units, `trim()` trims JavaScript's whitespace, `Number()` reads `0x10` and ` 5 `, `decodeURIComponent` throws on a bad escape, and `toISOString()` floors to milliseconds; `rust/src/util.rs` has each (`utf16_len`, `js_trim`, `js_number`, `decode_uri_component`, `iso`). Rust's own `len()`, `trim()` or `parse()` where the Bun code uses JavaScript's is a finding, with a conformance test at the boundary that tells them apart.
+- **A panic is a 500, not a crash**, since each request runs in a task of its own; but `unwrap`, `expect` or indexing on anything a request, a file or the database shapes is still a finding: return the error the Bun code's branch returns.
+- **Effects outside the database wait for the commit**: emails, alerts and wake-ups go through `Tx::after`, as the Bun code's run after its transaction; one sent from inside the transaction can go out for a change that rolls back.
 
 ### F. Product-specific gotchas (auth)
 
@@ -190,6 +199,8 @@ Exceptions: JSDoc on public / abstraction surfaces, TODO markers, one-line WHY w
 
 The runtime dependency set is deliberately empty: Bun's built-ins cover SQL, HTTP and crypto, and WebAuthn verification is auth's own (DESIGN.md §9.1). Any runtime dependency needs a stated reason in the body: in this service, every dependency is code that runs with every credential in reach. The product is Apache 2.0 (`LICENSE`). Check a new package's license (`node_modules/<pkg>/package.json` `license` and its `LICENSE`); one that is incompatible with Apache 2.0 (AGPL, non-commercial, research-only) is HIGH.
 
+The Rust server's crates are listed, with what each replaces, in `docs/DESIGN.md` §16, and pinned by `rust/Cargo.lock`, which is committed and built with `--locked` everywhere. A new crate, or a feature that pulls new ones into `Cargo.lock`, needs the same stated reason and license check (`cargo metadata --format-version 1`, each package's `license`), and the list in §16 changes with it.
+
 ### M. Public-repo hygiene — TWO axes, don't collapse them
 
 This repository is **public**, so every artifact it publishes — diff, README, `docs/*.md`, PR title/body, commit message, review comment — is read by strangers. The rule has two independent halves and a diff can pass one while failing the other.
@@ -214,6 +225,7 @@ Flag every M1 hit as **MED**, with the rewrite in the finding. A merged artifact
 
 - **The Dockerfile and CI run the same checks.** The builder stage runs `bun run typecheck` and `bun test`; CI runs them too. A new script, directory or config file the checks need is `COPY`ed into the builder, or CD breaks the moment the PR merges.
 - **The toolchain pin is one fact in three places:** `packageManager` in `package.json` (which `setup-bun` reads), both `FROM` lines in the Dockerfile, and the README. A diff that moves one moves all three.
+- **The Rust toolchain pin is one fact in three places too:** `rust/rust-toolchain.toml` (which rustup and CI's runner read), the builder's `FROM` line in `rust/Dockerfile`, and the version the README and `docs/DEPLOYMENT.md` name. `rust/Dockerfile`'s builder runs `cargo test --release --locked` before it builds, and copies what those need (`src/migrations`, `src/assets`, `rust/`); CI's `rust` job runs fmt, clippy with `-D warnings`, the unit tests, the recorder's `--check`, and the conformance suite against the Rust server, and its `rust-image` job does for `rust/Dockerfile` what `image` does for the Bun one.
 - **Every action is pinned to a full commit SHA with a version comment**, as the existing workflows are.
 - **CI's `image` job builds the image, starts it against Postgres and stops it with SIGTERM.** A change to the Dockerfile, the entry point, the healthcheck or shutdown handling keeps that job meaningful; weakening it to a bare `docker build` is a finding.
 - **CD publishes `main`'s tip after CI passed for it, and only then calls the deploy hook.** A deployment that follows releases takes each one through the hook in the `DEPLOY_URL` secret, by the digest CD posts (`docs/DEPLOYMENT.md` §2, the hook contract), so a merge to `main` is a production deploy for it. A diff that publishes from any other ref, publishes or calls the hook before CI passes for the commit it publishes, posts a sha or digest other than the one it published, prints the hook's URL or response, or puts a deployment's hook URL or token anywhere but the secrets is HIGH.

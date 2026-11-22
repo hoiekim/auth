@@ -5,29 +5,125 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, RecyclingMethod};
+use deadpool_postgres::{Hook, HookError, Manager, ManagerConfig, Object, Pool, RecyclingMethod};
 use tokio::sync::watch;
+use tokio_postgres::config::ChannelBinding;
+use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::Row;
+use tokio_postgres_rustls::MakeRustlsConnect;
 
 use crate::error::{Error, Result};
+use crate::pgurl::{self, SslMode, TlsFiles};
+use crate::tls::BoxError;
 
 pub type Param<'a> = &'a (dyn ToSql + Sync);
 
-/// Whether the connection string can be used at all: reported with the other
-/// configuration problems instead of failing the start after them.
-pub fn parses_as_database_url(url: &str) -> bool {
-    url.parse::<tokio_postgres::Config>().is_ok()
+/// A pool on DATABASE_URL, read as the Bun server's client reads it
+/// (rust/src/pgurl.rs). It opens no connection until one is asked for.
+pub fn connect(url: &str) -> std::result::Result<Pool, Error> {
+    let s = pgurl::parse(url, &|name| std::env::var(name).ok()).map_err(|_| Error::Other("ConfigError"))?;
+    let mut config = tokio_postgres::Config::new();
+    config.user(&s.username).password(s.password.as_bytes()).dbname(&s.database).port(s.port);
+    match &s.path {
+        // tokio-postgres reaches a socket as `<directory>/.s.PGSQL.<port>`,
+        // so a socket named otherwise can't be reached.
+        Some(path) => match path.rsplit_once("/.s.PGSQL.").map(|(dir, port)| (dir, port.parse::<u16>())) {
+            Some((dir, Ok(port))) => {
+                config.host_path(if dir.is_empty() { "/" } else { dir }).port(port);
+            }
+            _ => {
+                config.host_path(path);
+            }
+        },
+        None => {
+            config.host(s.hostname.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(&s.hostname));
+        }
+    }
+    // The startup parameters: two by their own names, `database` overriding
+    // the path's as it does after Bun's own, and the rest in `options`.
+    let (mut options, mut rest) = (String::new(), Vec::new());
+    for (name, value) in &s.startup {
+        match name.as_str() {
+            "application_name" => {
+                config.application_name(value);
+            }
+            "options" => options.clone_from(value),
+            "database" => {
+                config.dbname(value);
+            }
+            _ => rest.push((name.as_str(), value.as_str())),
+        }
+    }
+    let options = pgurl::options_with(&options, &rest);
+    if !options.is_empty() {
+        config.options(&options);
+    }
+    // Bun gives up on a connection after 30 seconds unless told otherwise;
+    // 0 waits for ever.
+    match s.connect_timeout {
+        None => {
+            config.connect_timeout(Duration::from_secs(30));
+        }
+        Some(timeout) if !timeout.is_zero() => {
+            config.connect_timeout(timeout);
+        }
+        Some(_) => {}
+    }
+    config.channel_binding(match s.channel_binding.as_str() {
+        "require" => ChannelBinding::Require,
+        "prefer" => ChannelBinding::Prefer,
+        _ => ChannelBinding::Disable,
+    });
+    config.ssl_mode(match s.ssl_mode {
+        SslMode::Disable => tokio_postgres::config::SslMode::Disable,
+        SslMode::Prefer => tokio_postgres::config::SslMode::Prefer,
+        _ => tokio_postgres::config::SslMode::Require,
+    });
+    let recycle = ManagerConfig { recycling_method: RecyclingMethod::Fast };
+    let manager = match s.ssl_mode {
+        SslMode::Disable => Manager::from_config(config, tokio_postgres::NoTls, recycle),
+        mode => Manager::from_config(config, PostgresTls { mode, files: s.tls.clone() }, recycle),
+    };
+    let mut pool = Pool::builder(manager).max_size(5);
+    // A connection idle, or open, for longer than the URL allows is closed
+    // when next taken, and another opened in its place.
+    let (idle, lifetime) = (s.idle_timeout.filter(|d| !d.is_zero()), s.max_lifetime.filter(|d| !d.is_zero()));
+    if idle.is_some() || lifetime.is_some() {
+        pool =
+            pool.pre_recycle(Hook::sync_fn(
+                move |_, metrics| {
+                    if lifetime.is_some_and(|l| metrics.age() >= l) || idle.is_some_and(|i| metrics.last_used() >= i) {
+                        Err(HookError::message("expired"))
+                    } else {
+                        Ok(())
+                    }
+                },
+            ));
+    }
+    pool.build().map_err(|_| Error::Other("PoolError"))
 }
 
-pub fn connect(url: &str) -> std::result::Result<Pool, Error> {
-    let config: tokio_postgres::Config = url.parse().map_err(|_| Error::Other("ConfigError"))?;
-    let recycle = ManagerConfig { recycling_method: RecyclingMethod::Fast };
-    let manager = match config.get_ssl_mode() {
-        tokio_postgres::config::SslMode::Disable | tokio_postgres::config::SslMode::Prefer => Manager::from_config(config, tokio_postgres::NoTls, recycle),
-        _ => Manager::from_config(config, tokio_postgres_rustls::MakeRustlsConnect::new(crate::tls::client_config()), recycle),
-    };
-    Pool::builder(manager).max_size(5).build().map_err(|_| Error::Other("PoolError"))
+/// TLS made for each connection from the URL's level and files.
+#[derive(Clone)]
+struct PostgresTls {
+    mode: SslMode,
+    files: TlsFiles,
+}
+
+impl<S> MakeTlsConnect<S> for PostgresTls
+where
+    MakeRustlsConnect: MakeTlsConnect<S>,
+    <MakeRustlsConnect as MakeTlsConnect<S>>::Error: Into<BoxError>,
+{
+    type Stream = <MakeRustlsConnect as MakeTlsConnect<S>>::Stream;
+    type TlsConnect = <MakeRustlsConnect as MakeTlsConnect<S>>::TlsConnect;
+    type Error = BoxError;
+
+    fn make_tls_connect(&mut self, hostname: &str) -> std::result::Result<Self::TlsConnect, BoxError> {
+        let config = crate::tls::postgres_config(self.mode, &self.files)?;
+        MakeRustlsConnect::new(config).make_tls_connect(hostname).map_err(Into::into)
+    }
 }
 
 /// Where a statement runs: on any pooled connection, or inside a transaction.

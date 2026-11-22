@@ -93,6 +93,12 @@ jobs:
           cargo fmt --check
           cargo clippy --release --locked -- -D warnings
 
+      # The Rust server reads a DATABASE_URL as Bun's SQL client does, case
+      # by case as rust/tests/database_urls.json records it: first that the
+      # Bun pinned here still reads each case so.
+      - name: Bun reads each DATABASE_URL case as recorded
+        run: bun rust/tests/database_urls.ts --check
+
       - name: Unit tests
         working-directory: rust
         run: cargo test --release --locked

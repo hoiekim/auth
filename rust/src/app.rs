@@ -57,7 +57,7 @@ impl Deref for App {
 const MAX_QUEUED_EMAILS: usize = 200;
 
 pub fn http_client() -> reqwest::Client {
-    reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().expect("an HTTP client")
+    reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).use_preconfigured_tls(crate::tls::client_config()).build().expect("an HTTP client")
 }
 
 pub fn log_line(to_stderr: bool, line: &str) {

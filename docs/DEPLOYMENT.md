@@ -115,7 +115,7 @@ bearer token.
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `PORT` | no | `3000` (the image sets it) | HTTP listen port |
-| `DATABASE_URL` | yes | — | Postgres connection string for the auth database |
+| `DATABASE_URL` | yes | — | Postgres connection string for the auth database: TLS and other parameters below |
 | `ISSUER_URL` | yes | — | The issuer: the https origin browsers and apps reach auth at, with no path. It is every token's `iss` and the passkeys' RP ID, so changing it signs everyone out and invalidates every passkey. |
 | `SERVICES_FILE` | no | none | Path to a services file inside the container (below) |
 | `AUTH_ENCRYPTION_KEY` | yes | — | 32 random bytes, base64 (`openssl rand -base64 32`), optionally written `v<N>:<base64>` to give it a version (a bare key is version 1). Encrypts signing keys and TOTP secrets at rest. Keep a copy offline: a restored backup is useless without it. |
@@ -132,6 +132,44 @@ bearer token.
 Secrets (`DATABASE_URL`, `AUTH_ENCRYPTION_KEY` and `AUTH_DECRYPTION_KEYS`, the password in `SMTP_URL`,
 a token in `ALERT_WEBHOOK_URL`) come from the deployment's secret store into
 the environment, never from the image or the database.
+
+### Connecting to Postgres
+
+`DATABASE_URL` is `postgres://user:password@host:port/database`, with
+anything in it percent-encoded, and these query parameters:
+
+- **`sslmode`**, for TLS to Postgres: `disable`, the default, never asks
+  for it; `prefer` (or `allow`) takes it when the server offers it;
+  `require` insists on it. None of these three checks the server's
+  certificate. `verify-ca` checks that it chains to a trusted root, and
+  `verify-full` that it also names the host. Anything else refuses the
+  start.
+- **`sslrootcert=<file>`** makes that PEM file the only root trusted, and
+  means `verify-full` unless `sslmode` says `verify-ca`; it can be the
+  server's own self-signed certificate, made as Postgres's documentation
+  shows (`openssl req -x509 …`). `sslrootcert=system` checks against the
+  usual roots instead: the public ones, the host's store, `SSL_CERT_FILE`,
+  and the PEM file `NODE_EXTRA_CA_CERTS` names, which is where a private CA
+  goes. A certificate with no DNS names may name the host in its common
+  name. A file that can't be read fails each connection, not the start.
+- **`sslcert=<file>&sslkey=<file>`** shows a client certificate, and asks
+  for TLS.
+- **`application_name`**, and any other parameter that isn't the client's
+  own (`statement_timeout=5000`, `search_path=…`), goes to Postgres as a
+  setting for every connection.
+- `connect_timeout` (seconds, default 30, `0` for none), `idle_timeout` and
+  `max_lifetime` (seconds) for the pool's connections; `channel_binding`
+  (`disable`, the default, `prefer` or `require`); and `host`, `port`,
+  `user`, `password` and `dbname`, which win over the URL's own.
+  libpq's keywords for its own connection (`keepalives`,
+  `target_session_attrs` and the like) are read past.
+
+What the URL leaves out comes from `PGHOST`, `PGPORT`, `PGUSER`,
+`PGPASSWORD`, `PGSSLMODE`, `PGAPPNAME`, `PGOPTIONS`, `PGCONNECT_TIMEOUT` and
+`PGCHANNELBINDING`; `PGDATABASE`, though, wins over the URL's database. A
+host that is a directory (`?host=/var/run/postgresql`) is a Unix socket,
+where there is no TLS. Over any network the deployment doesn't control,
+use `verify-full`.
 
 ### Services
 

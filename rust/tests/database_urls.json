@@ -1,0 +1,3046 @@
+[
+ {
+  "url": "postgres://auth:s3cret-pw@db.internal:5432/auth",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "s3cret-pw",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgresql://auth@db.internal/auth",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth:auth@localhost:5432/auth?options=-c%20search_path%3Dc_0123456789ab",
+  "env": {},
+  "bun": {
+   "hostname": "localhost",
+   "port": 5432,
+   "username": "auth",
+   "password": "auth",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [
+    [
+     "options",
+     "-c search_path=c_0123456789ab"
+    ]
+   ],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://db.internal",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "postgres",
+   "password": "",
+   "database": "postgres",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://db.internal",
+  "env": {
+   "USER": "alice"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "alice",
+   "password": "",
+   "database": "alice",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://db.internal",
+  "env": {
+   "USERNAME": "alice"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "alice",
+   "password": "",
+   "database": "alice",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://db.internal",
+  "env": {
+   "USER": "alice",
+   "PGUSER": "bob",
+   "PGUSERNAME": "carol"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "carol",
+   "password": "",
+   "database": "carol",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://db.internal",
+  "env": {
+   "USER": "alice",
+   "PGUSER": "bob",
+   "PG_USER": "dave"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "dave",
+   "password": "",
+   "database": "dave",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://erin@db.internal",
+  "env": {
+   "PGUSERNAME": "carol"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "erin",
+   "password": "",
+   "database": "erin",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres:///auth",
+  "env": {
+   "PGHOST": "db.internal",
+   "PGPORT": "6543",
+   "PGPASSWORD": "s3cret-pw"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 6543,
+   "username": "postgres",
+   "password": "s3cret-pw",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres:///auth",
+  "env": {
+   "PG_HOST": "a.internal",
+   "PGHOST": "b.internal"
+  },
+  "bun": {
+   "hostname": "a.internal",
+   "port": 5432,
+   "username": "postgres",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth",
+  "env": {
+   "PGDATABASE": "other"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "other",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?dbname=fromquery",
+  "env": {
+   "PGDATABASE": "other"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "other",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?dbname=fromquery",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "fromquery",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth:@db.internal/auth",
+  "env": {
+   "PGPASSWORD": "from-env"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "from-env",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth:inline@db.internal/auth",
+  "env": {
+   "PGPASSWORD": "from-env"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "inline",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth",
+  "env": {
+   "PGPORT": "abc"
+  },
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth",
+  "env": {
+   "PGPORT": " 6543 "
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 6543,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal:7000/auth",
+  "env": {
+   "PGPORT": "6543"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 7000,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth:p%40ss%20w@db.internal/my%20db",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "p@ss w",
+   "database": "my db",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://al%69ce@db.internal/auth",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "alice",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth:%zz@db.internal/auth",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth:%ff@db.internal/auth",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/a%zz",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://a%zz@db.internal/auth?user=bob",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "bob",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/a/b",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "a/b",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth:pw@db.internal:notaport/auth",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgresql://auth:pw@db.internal:99999/auth",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal:0/auth",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal:65535/auth",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 65535,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth:pw@/auth?host=db.internal&port=6000",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 6000,
+   "username": "auth",
+   "password": "pw",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://:6000/auth",
+  "env": {},
+  "bun": {
+   "hostname": "localhost",
+   "port": 6000,
+   "username": "postgres",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@:6000/auth",
+  "env": {},
+  "bun": {
+   "hostname": "localhost",
+   "port": 6000,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres:///auth",
+  "env": {},
+  "bun": {
+   "hostname": "localhost",
+   "port": 5432,
+   "username": "postgres",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@[::1]:5433/auth",
+  "env": {},
+  "bun": {
+   "hostname": "[::1]",
+   "port": 5433,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@[fe80::1%25eth0]/auth",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@a.internal:1,b.internal:2/auth",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@DB.Internal/auth",
+  "env": {},
+  "bun": {
+   "hostname": "DB.Internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db%2Dx.internal/auth",
+  "env": {},
+  "bun": {
+   "hostname": "db%2Dx.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@dé.internal/auth",
+  "env": {},
+  "bun": {
+   "hostname": "d%C3%A9.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.inte\trnal/auth",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@%2Fvar%2Frun%2Fpostgresql/auth",
+  "env": {},
+  "bun": {
+   "hostname": "localhost",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": "/var/run/postgresql/.s.PGSQL.5432",
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@%2fvar%2frun%2fpostgresql:6000/auth",
+  "env": {},
+  "bun": {
+   "hostname": "localhost",
+   "port": 6000,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": "/var/run/postgresql/.s.PGSQL.6000",
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@%2F%zz/auth",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?host=/var/run/postgresql",
+  "env": {},
+  "bun": {
+   "hostname": "localhost",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": "/var/run/postgresql/.s.PGSQL.5432",
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal:6000/auth?host=/var/run/postgresql",
+  "env": {},
+  "bun": {
+   "hostname": "localhost",
+   "port": 6000,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": "/var/run/postgresql/.s.PGSQL.6000",
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?socket=/tmp",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": "/tmp/.s.PGSQL.5432",
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?path=/run/postgresql/.s.PGSQL.6000",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": "/run/postgresql/.s.PGSQL.6000",
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?path=/nonexistent/socket",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": "/nonexistent/socket",
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?host=/var/run/postgresql&sslmode=require",
+  "env": {},
+  "bun": {
+   "hostname": "localhost",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": "/var/run/postgresql/.s.PGSQL.5432",
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?path=",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=disable",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=DISABLED",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=allow",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 1,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=prefer",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 1,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=preferred",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 1,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=require",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 2,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=Required",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 2,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=verify-ca",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 3,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=verify_ca",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 3,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=verify-full",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 4,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=verify_identity",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 4,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=bogus",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=no-verify",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=disable&sslmode=require",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?SSLMODE=require",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 2,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?ssl-mode=require",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 2,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?ssl_mode=verify-full",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 4,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?ssl%6Dode=require",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 2,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?ssl=true",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 2,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?ssl=1",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 2,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?tls=TRUE",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 2,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?ssl=false",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?tls=0",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?ssl=require",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 2,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?tls=verify-full",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 4,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?ssl=maybe",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?ssl=",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=prefer&ssl=true",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 2,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=verify-ca&ssl=true",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 3,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?ssl=false&sslmode=require",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 2,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth",
+  "env": {
+   "PGSSLMODE": "verify-ca"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 3,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=disable",
+  "env": {
+   "PGSSLMODE": "require"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth",
+  "env": {
+   "PGSSLMODE": "bogus"
+  },
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=require",
+  "env": {
+   "PGSSLMODE": "bogus"
+  },
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth",
+  "env": {
+   "PG_SSLMODE": "prefer",
+   "PGSSLMODE": "verify-full"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 1,
+   "tls": {
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslrootcert=/etc/ssl/db-ca.pem",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 4,
+   "tls": {
+    "caFile": "/etc/ssl/db-ca.pem",
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=require&sslrootcert=/etc/ssl/db-ca.pem",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 4,
+   "tls": {
+    "caFile": "/etc/ssl/db-ca.pem",
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=prefer&sslrootcert=/etc/ssl/db-ca.pem",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 4,
+   "tls": {
+    "caFile": "/etc/ssl/db-ca.pem",
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=verify-ca&sslrootcert=/etc/ssl/db-ca.pem",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 3,
+   "tls": {
+    "caFile": "/etc/ssl/db-ca.pem",
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=disable&sslrootcert=/etc/ssl/db-ca.pem",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 4,
+   "tls": {
+    "caFile": "/etc/ssl/db-ca.pem",
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=require&sslrootcert=system",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 4,
+   "tls": {
+    "rejectUnauthorized": true,
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=verify-ca&sslrootcert=system",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 3,
+   "tls": {
+    "rejectUnauthorized": true,
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslrootcert=system&SSLROOTCERT=/etc/ssl/db-ca.pem",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 4,
+   "tls": {
+    "caFile": "/etc/ssl/db-ca.pem",
+    "rejectUnauthorized": true,
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslrootcert=/a.pem&SSLROOTCERT=/b.pem",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 4,
+   "tls": {
+    "caFile": "/b.pem",
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslrootcert=",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?ssl=false&sslcert=/etc/ssl/client.pem",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 2,
+   "tls": {
+    "certFile": "/etc/ssl/client.pem",
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslcert=/etc/ssl/client.pem&sslkey=/etc/ssl/client.key&sslpassword=s3cret-pw",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 2,
+   "tls": {
+    "certFile": "/etc/ssl/client.pem",
+    "keyFile": "/etc/ssl/client.key",
+    "passphrase": "s3cret-pw",
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?sslmode=verify-full&sslkey=/etc/ssl/client.key",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 4,
+   "tls": {
+    "keyFile": "/etc/ssl/client.key",
+    "serverName": "db.internal"
+   },
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?application_name=wiki-auth",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [
+    [
+     "application_name",
+     "wiki-auth"
+    ]
+   ],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?application_name=a&application_name=b",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [
+    [
+     "application_name",
+     "a,b"
+    ]
+   ],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?application_name=a+b&search_path=s1",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [
+    [
+     "application_name",
+     "a b"
+    ],
+    [
+     "search_path",
+     "s1"
+    ]
+   ],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?application_name=%zz",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [
+    [
+     "application_name",
+     "%zz"
+    ]
+   ],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?application_name=",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [
+    [
+     "application_name",
+     ""
+    ]
+   ],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?application_name=x",
+  "env": {
+   "PGAPPNAME": "from-env",
+   "PGOPTIONS": "-c work_mem=4MB"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [
+    [
+     "application_name",
+     "x"
+    ],
+    [
+     "options",
+     "-c work_mem=4MB"
+    ]
+   ],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?statement_timeout=5&application_name=x",
+  "env": {
+   "PGAPPNAME": "from-env"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [
+    [
+     "application_name",
+     "x"
+    ],
+    [
+     "statement_timeout",
+     "5"
+    ]
+   ],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?options=-c%20statement_timeout%3D777&statement_timeout=888",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [
+    [
+     "options",
+     "-c statement_timeout=777"
+    ],
+    [
+     "statement_timeout",
+     "888"
+    ]
+   ],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?Statement_Timeout=999&foo=bar",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [
+    [
+     "Statement_Timeout",
+     "999"
+    ],
+    [
+     "foo",
+     "bar"
+    ]
+   ],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?database=other",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [
+    [
+     "database",
+     "other"
+    ]
+   ],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?Database=other",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [
+    [
+     "Database",
+     "other"
+    ]
+   ],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?DBNAME=other&USER=bob&Password=pw&HOST=h.internal&Port=6000",
+  "env": {},
+  "bun": {
+   "hostname": "h.internal",
+   "port": 6000,
+   "username": "bob",
+   "password": "pw",
+   "database": "other",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?gssencmode=require",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [
+    [
+     "gssencmode",
+     "require"
+    ]
+   ],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?gssencmode=disable",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?keepalives=1&keepalives_idle=5&keepalives_interval=1&keepalives_count=3&tcp_user_timeout=9&target_session_attrs=read-write&load_balance_hosts=random&fallback_application_name=x&sslnegotiation=direct&sslcompression=0",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?a",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [
+    [
+     "a",
+     ""
+    ]
+   ],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?=x",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [
+    [
+     "",
+     "x"
+    ]
+   ],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?application_name=%00",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?%00x=1",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth#fragment",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?connect_timeout=10",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": 10000,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?connect_timeout=1.5",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": 1500,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?connect_timeout=0",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": 0,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?connect_timeout=-1",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?connect_timeout=abc",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?connect_timeout=2147483648",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": 2147483648000,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?connect_timeout=2147483649",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?connect_timeout=0x10",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": 16000,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?connect_timeout=%201e1%20",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": 10000,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?connect_timeout=",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth",
+  "env": {
+   "PGCONNECT_TIMEOUT": "7"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": 7000,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?connect_timeout=3",
+  "env": {
+   "PGCONNECT_TIMEOUT": "7"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": 3000,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth",
+  "env": {
+   "PGCONNECT_TIMEOUT": "never"
+  },
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?idle_timeout=5&max_lifetime=60",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": 5000,
+   "maxLifetime": 60000
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?idle_timeout=-0",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": 0,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?max_lifetime=Infinity",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?max=abc&foundrows=true",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?prepare=false",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": false,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?prepare=0",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": false,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?prepare=true",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?prepare=no",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?channel_binding=require",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "require",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?channel_binding=prefer",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "prefer",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?channel_binding=disable",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?channel_binding=sometimes",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?channel_binding=REQUIRE",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth",
+  "env": {
+   "PGCHANNELBINDING": "require"
+  },
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "require",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth",
+  "env": {
+   "PGCHANNELBINDING": "always"
+  },
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?host=other.internal&port=6000&user=bob&password=pw2&dbname=db2",
+  "env": {},
+  "bun": {
+   "hostname": "other.internal",
+   "port": 6000,
+   "username": "bob",
+   "password": "pw2",
+   "database": "db2",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?port=0x1770",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 6000,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?port=5e3",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5000,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?port=1.5",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?port=0",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?port=70000",
+  "env": {},
+  "bun": {
+   "refused": true
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?port=",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?port=6000&PORT=7000",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 6000,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ },
+ {
+  "url": "postgres://auth@db.internal/auth?host=&user=",
+  "env": {},
+  "bun": {
+   "hostname": "db.internal",
+   "port": 5432,
+   "username": "auth",
+   "password": "",
+   "database": "auth",
+   "path": null,
+   "sslMode": 0,
+   "tls": null,
+   "startup": [],
+   "channelBinding": "disable",
+   "prepare": true,
+   "connectionTimeout": null,
+   "idleTimeout": null,
+   "maxLifetime": null
+  }
+ }
+]

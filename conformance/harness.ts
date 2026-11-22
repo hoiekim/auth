@@ -1,6 +1,6 @@
 import { SQL, type Subprocess } from "bun";
 import { createCipheriv, createDecipheriv, createHash, createHmac, createPublicKey, hkdfSync, randomBytes, verify as verifySignature } from "node:crypto";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -626,6 +626,196 @@ export class HttpSink {
 
   async waitForAlert(match: string | RegExp, timeoutMs = 5000): Promise<string> {
     return waitFor(() => this.alerts.findLast((a) => (typeof match === "string" ? a.includes(match) : match.test(a))), `an alert matching ${match}`, timeoutMs);
+  }
+}
+
+// ------------------------------------------------------ Postgres behind TLS
+
+// A certificate and its key, as PEM files.
+export interface Certificate {
+  cert: string;
+  key: string;
+}
+
+// Certificates made with the openssl command, in `dir`: self-signed ones as
+// `openssl req -x509` makes them (marked as a CA, unless `ca` is false: how
+// Postgres's documentation has one made), and ones a test CA issues.
+export class Certificates {
+  #made = 0;
+  #ca: Certificate | null = null;
+
+  constructor(readonly dir: string) {
+    mkdirSync(dir, { recursive: true });
+  }
+
+  selfSigned(subject: string, opts: { san?: string; ca?: boolean } = {}): Certificate {
+    const out = this.#paths();
+    const ext = [...(opts.san ? ["-addext", `subjectAltName=${opts.san}`] : []), ...(opts.ca === false ? ["-addext", "basicConstraints=critical,CA:FALSE"] : [])];
+    this.#openssl(["req", "-x509", ...NEW_KEY, "-days", "2", "-subj", subject, "-keyout", out.key, "-out", out.cert, ...ext]);
+    return out;
+  }
+
+  // The CA that issued() signs with.
+  get ca(): Certificate {
+    this.#ca ??= this.selfSigned("/CN=Conformance CA");
+    return this.#ca;
+  }
+
+  issued(subject: string, opts: { san?: string; ca?: boolean; expired?: boolean } = {}): Certificate {
+    const out = this.#paths();
+    const csr = `${out.cert}.csr`;
+    const ext = `${out.cert}.ext`;
+    this.#openssl(["req", "-new", ...NEW_KEY, "-subj", subject, "-keyout", out.key, "-out", csr]);
+    writeFileSync(ext, `basicConstraints=critical,CA:${opts.ca ? "TRUE" : "FALSE"}\n${opts.san ? `subjectAltName=${opts.san}\n` : ""}`);
+    if (!opts.expired) {
+      this.#openssl(["x509", "-req", "-in", csr, "-CA", this.ca.cert, "-CAkey", this.ca.key, "-CAcreateserial", "-days", "2", "-extfile", ext, "-out", out.cert]);
+      return out;
+    }
+    // openssl ca, for the dates: valid for a day in 2020.
+    const db = `${out.cert}.db`;
+    mkdirSync(db);
+    writeFileSync(join(db, "index.txt"), "");
+    writeFileSync(join(db, "serial"), "01\n");
+    const config = `${out.cert}.cnf`;
+    writeFileSync(config, `[ca]\ndefault_ca = d\n[d]\ndir = ${db}\ndatabase = ${db}/index.txt\nserial = ${db}/serial\nnew_certs_dir = ${db}\ndefault_md = sha256\npolicy = p\nunique_subject = no\n[p]\ncommonName = supplied\n`);
+    this.#openssl(["ca", "-batch", "-notext", "-config", config, "-cert", this.ca.cert, "-keyfile", this.ca.key, "-in", csr, "-extfile", ext, "-startdate", "20200101000000Z", "-enddate", "20200102000000Z", "-out", out.cert]);
+    return out;
+  }
+
+  #paths(): Certificate {
+    const n = ++this.#made;
+    return { cert: join(this.dir, `${n}.crt`), key: join(this.dir, `${n}.key`) };
+  }
+
+  #openssl(args: string[]): void {
+    const done = Bun.spawnSync(["openssl", ...args], { cwd: this.dir, stdout: "pipe", stderr: "pipe" });
+    if (done.exitCode !== 0) throw new Error(`openssl ${args[0]} failed: ${done.stderr.toString()}`);
+  }
+}
+
+const NEW_KEY = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes"];
+
+// What one connection through a PostgresFront did: whether it asked for TLS
+// (sent an SSLRequest), got it, and the common name of the certificate it
+// showed, if it showed one.
+export interface FrontSession {
+  asked: boolean;
+  tls: boolean;
+  clientCert: string | null;
+}
+
+const SSL_REQUEST = 80877103;
+const GSSENC_REQUEST = 80877104;
+
+// A Postgres that speaks TLS, standing in front of the test database: it
+// answers a client's SSLRequest as Postgres does, with `S`, or with `N` when
+// it is given no certificate; ends TLS with its certificate, asking for the
+// client's; and passes the plaintext on. Every connection is recorded.
+export class PostgresFront {
+  readonly sessions: FrontSession[] = [];
+  port = 0;
+  #front: net.Server | null = null;
+  #inner: import("node:tls").Server | null = null;
+  #sockets = new Set<net.Socket>();
+
+  static async start(certificate: Certificate | null): Promise<PostgresFront> {
+    const front = new PostgresFront();
+    await front.#listen(certificate);
+    return front;
+  }
+
+  // The stack's schema through this front: TEST_DATABASE_URL's user,
+  // password and database at `host` (127.0.0.1 unless given), with `query`
+  // after the schema.
+  url(stack: Stack, query = "", host = "127.0.0.1"): string {
+    const db = new URL(TEST_DATABASE_URL!);
+    return `postgres://${db.username}:${db.password}@${host}:${this.port}${db.pathname}?options=-c%20search_path%3D${stack.schema}${query ? `&${query}` : ""}`;
+  }
+
+  async stop(): Promise<void> {
+    for (const socket of this.#sockets) socket.destroy();
+    await Promise.all([this.#front, this.#inner].map((server) => new Promise<void>((done) => (server ? server.close(() => done()) : done()))));
+  }
+
+  async #listen(certificate: Certificate | null): Promise<void> {
+    const tls = await import("node:tls");
+    const db = new URL(TEST_DATABASE_URL!);
+    const upstream = () => this.#track(net.connect(Number(db.port || 5432), db.hostname));
+    const join = (a: net.Socket, b: net.Socket) => {
+      a.pipe(b);
+      b.pipe(a);
+      for (const [x, y] of [
+        [a, b],
+        [b, a],
+      ] as const) {
+        x.on("error", () => y.destroy());
+        x.on("close", () => y.destroy());
+      }
+    };
+    // TLS ends here; the front pipes the client's bytes in after its `S`.
+    const handshakes = new Map<number, FrontSession>();
+    if (certificate) {
+      const options = { key: readFileSync(certificate.key), cert: readFileSync(certificate.cert), requestCert: true, rejectUnauthorized: false };
+      this.#inner = tls.createServer(options, (socket) => {
+        this.#track(socket);
+        const session = handshakes.get(socket.remotePort ?? 0);
+        if (session) {
+          session.tls = true;
+          const peer = socket.getPeerCertificate() as { subject?: { CN?: string } } | null;
+          session.clientCert = peer?.subject?.CN ?? null;
+        }
+        join(socket, upstream());
+      });
+      this.#inner.on("tlsClientError", () => {});
+      await new Promise<void>((done) => this.#inner!.listen(0, "127.0.0.1", done));
+    }
+    const innerPort = this.#inner ? (this.#inner.address() as net.AddressInfo).port : 0;
+    this.#front = net.createServer((client) => {
+      this.#track(client);
+      const session: FrontSession = { asked: false, tls: false, clientCert: null };
+      this.sessions.push(session);
+      let buffered = Buffer.alloc(0);
+      const onData = (chunk: Buffer) => {
+        buffered = Buffer.concat([buffered, chunk]);
+        while (buffered.length >= 8 && buffered.readUInt32BE(0) === 8) {
+          const code = buffered.readUInt32BE(4);
+          if (code === GSSENC_REQUEST) {
+            client.write("N");
+          } else if (code === SSL_REQUEST) {
+            session.asked = true;
+            if (!this.#inner) client.write("N");
+            else {
+              client.off("data", onData);
+              const to = this.#track(net.connect(innerPort, "127.0.0.1"));
+              to.on("connect", () => handshakes.set(to.localPort ?? 0, session));
+              const rest = buffered.subarray(8);
+              if (rest.length > 0) to.write(rest);
+              join(client, to);
+              client.write("S");
+              return;
+            }
+          } else break;
+          buffered = buffered.subarray(8);
+        }
+        if (buffered.length < 8) return;
+        // A startup message: plaintext from here.
+        client.off("data", onData);
+        const to = upstream();
+        to.write(buffered);
+        join(client, to);
+      };
+      client.on("data", onData);
+      client.on("error", () => {});
+    });
+    await new Promise<void>((done) => this.#front!.listen(0, "127.0.0.1", done));
+    this.port = (this.#front.address() as net.AddressInfo).port;
+  }
+
+  #track<T extends net.Socket>(socket: T): T {
+    this.#sockets.add(socket);
+    socket.on("close", () => this.#sockets.delete(socket));
+    socket.on("error", () => {});
+    return socket;
   }
 }
 

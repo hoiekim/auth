@@ -222,6 +222,64 @@ pub fn decode_uri_component(s: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
+/// `Number(text)`: JavaScript's reading of a string as a number, NaN where
+/// it reads none. Whitespace around it is ignored, an empty string is 0, and
+/// `0x`, `0o` and `0b` prefixes, exponents and `Infinity` are numbers.
+pub fn js_number(text: &str) -> f64 {
+    let s = js_trim(text);
+    if s.is_empty() {
+        return 0.0;
+    }
+    match s {
+        "Infinity" | "+Infinity" => return f64::INFINITY,
+        "-Infinity" => return f64::NEG_INFINITY,
+        _ => {}
+    }
+    let radix = match s.get(..2) {
+        Some("0x" | "0X") => 16,
+        Some("0o" | "0O") => 8,
+        Some("0b" | "0B") => 2,
+        _ => 10,
+    };
+    if radix != 10 {
+        let digits = &s[2..];
+        if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+            return f64::NAN;
+        }
+        return digits.chars().fold(0.0, |n, c| n * f64::from(radix) + f64::from(c.to_digit(radix).unwrap_or(0)));
+    }
+    let b = s.as_bytes();
+    let digits_from = |mut i: usize| {
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        i
+    };
+    let start = usize::from(matches!(b[0], b'+' | b'-'));
+    let mut i = digits_from(start);
+    let mut digits = i - start;
+    if b.get(i) == Some(&b'.') {
+        let end = digits_from(i + 1);
+        digits += end - i - 1;
+        i = end;
+    }
+    if digits == 0 {
+        return f64::NAN;
+    }
+    if matches!(b.get(i), Some(b'e' | b'E')) {
+        let sign = usize::from(matches!(b.get(i + 1), Some(b'+' | b'-')));
+        let end = digits_from(i + 1 + sign);
+        if end == i + 1 + sign {
+            return f64::NAN;
+        }
+        i = end;
+    }
+    if i != b.len() {
+        return f64::NAN;
+    }
+    s.parse().unwrap_or(f64::NAN)
+}
+
 /// `new URLSearchParams(pairs).toString()`.
 pub fn form_encode(pairs: &[(&str, &str)]) -> String {
     let mut s = form_urlencoded::Serializer::new(String::new());
@@ -247,6 +305,34 @@ mod tests {
         assert_eq!(utf16_prefix("a\u{1f600}b", 2), "a");
         assert_eq!(utf16_prefix("a\u{1f600}b", 3), "a\u{1f600}");
         assert_eq!(char_count("a\u{1f600}"), 2);
+    }
+
+    #[test]
+    fn numbers_read_as_javascript_reads_them() {
+        for (text, n) in [
+            ("5433", 5433.0),
+            (" 5433\n", 5433.0),
+            ("", 0.0),
+            ("  ", 0.0),
+            ("0x1F", 31.0),
+            ("0o17", 15.0),
+            ("0b101", 5.0),
+            ("5e3", 5000.0),
+            ("1.5", 1.5),
+            (".5", 0.5),
+            ("5.", 5.0),
+            ("+5", 5.0),
+            ("-5", -5.0),
+            ("007", 7.0),
+            ("1E+2", 100.0),
+        ] {
+            assert_eq!(js_number(text), n, "{text:?}");
+        }
+        assert_eq!(js_number("Infinity"), f64::INFINITY);
+        assert_eq!(js_number("-Infinity"), f64::NEG_INFINITY);
+        for text in ["abc", "5a", "0x", "0xg", "-0x5", "1_000", "inf", "nan", "NaN", ".", "+", "1e", "1e+", "e5", "5 5", "infinity"] {
+            assert!(js_number(text).is_nan(), "{text:?}");
+        }
     }
 
     #[test]

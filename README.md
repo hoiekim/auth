@@ -120,12 +120,14 @@ The Rust server needs the toolchain `rust/rust-toolchain.toml` pins, which
 rustup installs by itself:
 
 ```sh
+set -a; . ./.env; set +a            # it reads no .env file of its own
 cd rust
 cargo run --release                 # the server, configured by the same environment
 cargo run --release -- cli help     # its break-glass CLI
 cargo fmt --check && cargo clippy --release -- -D warnings && cargo test --release
 cd ..
 TEST_DATABASE_URL=postgres://auth:auth@localhost:5432/auth bun run test:rust   # builds it, then runs conformance/ against it
+bun rust/tests/database_urls.ts --check   # Bun still reads each DATABASE_URL case as recorded
 ```
 
 `bun test` runs `conformance/` against the Bun server, with the unit tests.

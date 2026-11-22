@@ -30,6 +30,7 @@ mod oauth;
 mod pages;
 mod passkeys;
 mod passwords;
+mod pgurl;
 mod registry;
 mod rekey;
 mod routes;
@@ -43,6 +44,7 @@ mod totp;
 mod users;
 mod util;
 mod webauthn;
+mod x509;
 
 use std::process::ExitCode;
 use std::sync::atomic::Ordering;

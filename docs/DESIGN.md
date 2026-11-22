@@ -835,7 +835,7 @@ Counters live in the `throttle` table, so every copy shares them and a restart d
 | CSRF and clickjacking | §9.2 |
 | Cookie tossing from a sibling subdomain | `__Host-` cookies at auth and in every app |
 | A compromised app | It can mint nothing, read nothing of auth's beyond its own service's users, and change access only for its own service. Rotate its client secret. |
-| A compromised auth image | Every integrated app falls. So: no runtime dependencies; an image run by digest (§11), either the deployment's own reviewed pin or the digest CD's run posts to its deploy hook, so that pushing over a tag changes nothing (a hook that pulls `latest` gives this up, and makes the registry credential as sensitive as merge rights); MFA on `auth:admin`; and an alert on every access change for `auth` and on every break-glass use. |
+| A compromised auth image | Every integrated app falls. So: no runtime dependencies in the Bun server, a short reviewed list in the Rust one (§16); an image run by digest (§11), either the deployment's own reviewed pin or the digest CD's run posts to its deploy hook, so that pushing over a tag changes nothing (a hook that pulls `latest` gives this up, and makes the registry credential as sensitive as merge rights); MFA on `auth:admin`; and an alert on every access change for `auth` and on every break-glass use. |
 | Database read by a third party | §9.3 |
 | An app password sent before TLS on a password-only protocol | The server refuses AUTH before TLS on every port (§12.4) |
 | A malicious admin, or a mistake | Audit log, an alert on admin actions, A5 needing an out-of-band check. A change to a service, which can add a redirect URI and make a secret, needs a recent sign-in with a second factor, and its alert names each redirect URI it adds; a service in the services file is out of an admin's reach while the file declares it, and a held copy that takes over once the file no longer does is alerted (§6.2). |
@@ -1015,7 +1015,7 @@ Both imports are all or nothing: every line is checked first, every problem is l
 
 **The cost of building it** is owning security-critical code. That is contained by:
 - the narrow scope (§7.2's "not implemented" list);
-- no runtime dependencies: Bun's built-ins cover SQL, HTTP and crypto, and WebAuthn verification is auth's own (§9.1);
+- no runtime dependencies in the Bun server: Bun's built-ins cover SQL, HTTP and crypto, and WebAuthn verification is auth's own (§9.1); the Rust server has a short list of widely used crates in their place (§16);
 - standard formats, so off-the-shelf conformance tests apply (the OpenID Foundation's Basic OP test plan);
 - review on every change (`docs/agents/auth-reviewer.md`).
 
@@ -1023,3 +1023,70 @@ Both imports are all or nothing: every line is checked first, every problem is l
 
 1. **Federation with outside identity providers** (sign in with an existing OIDC provider) is a non-goal for v1. What would make it a goal?
 2. **Groups shared across services** (a group such as "Support" that several apps give roles to) are a non-goal; an app's own groups are its own (§12.6). What signal would show that shared groups are needed: the same people granted the same roles in several apps, again and again?
+
+## 16. Implementations
+
+The service is written twice, to the one contract this document is:
+
+- `src/`: TypeScript on Bun, with no runtime dependencies (§14). Its
+  break-glass CLI is `bun cli.ts`.
+- `rust/`: Rust, one binary. `auth` serves, `auth cli <command>` is the
+  break-glass CLI (§9.6), and `auth healthcheck` is its image's health check.
+
+**Either server, one deployment.** Both read the same environment (§11) and
+services file, and use the same database: the migrations in
+`src/migrations` and the pages' assets in `src/assets` are the one copy
+each applies and serves (the Rust binary has them built in). Everything
+either stores or hands out has one format: the password hashes (§9.1), the
+ciphertexts with their key versions (§9.3), sealed cookies and CSRF tokens
+(§9.2), signing keys and tokens (§7.3), the SHA-256 lookups, and the
+advisory-lock and rate-limit keys. Copies of each can run side by side on
+one database, so a deployment moves from one to the other, and back, with
+an ordinary rolling deploy.
+
+**Held to the same behaviour.** `conformance/` starts a server as a process
+and reaches it only over HTTP, SMTP, the CLI and Postgres, so the same tests
+run against either (`AUTH_BACKEND`): statuses, error texts, headers,
+cookies, redirects, pages, rows, audit entries, events, emails, alerts and
+log lines. `conformance/mixed.test.ts` runs a copy of each on one database,
+both ways. Some of the Bun server's behaviour comes from its runtime rather
+than from `src/`: how `DATABASE_URL` is read (`docs/DEPLOYMENT.md` §3:
+which parameters are the client's, which go to Postgres, `sslmode`, the
+`PG*` variables) and which TLS certificates are accepted (OpenSSL's rules).
+The Rust server reproduces those too. `rust/tests/database_urls.json`
+records Bun's reading of each case, CI checks that the Bun it runs still
+reads them so, and the Rust server's tests check its own reading against
+them. A change to behaviour is made in both, with a test both pass.
+
+**Dependencies.** The Rust server has no runtime's built-ins to lean on, so
+it has crates in their place: tokio and hyper for HTTP, tokio-postgres and
+deadpool-postgres for SQL and the pool (§10), rustls with the bundled public
+roots and the host's for TLS, reqwest for outbound HTTPS, ring for Ed25519,
+AES-GCM, HKDF, HMAC and SHA-2, argon2 and bcrypt, p256 for passkeys'
+ES256, and chrono, serde_json, url and base64. `Cargo.lock` pins every one,
+and the image builds with `--locked`. A deployment that runs the Rust image
+trusts that list where §9.5 has the Bun image trust none.
+
+**What a deployment sees differ.**
+- The CLI's name, in its commands and in the messages that name it.
+- The image: `rust/Dockerfile` builds one binary onto `debian:bookworm-slim`,
+  run as `nobody`, its `HEALTHCHECK` `auth healthcheck`. CD publishes the
+  Bun image only (`docs/DEPLOYMENT.md`).
+- Memory. Measured alike, with no limit, around five rounds of 40
+  concurrent password sign-ins: the Rust server's RSS was 9 MiB at rest and
+  31 MiB after, 22 MiB of it anonymous, mostly the one 19 MiB argon2id
+  work area it keeps for the next hash; the Bun server's was 40 MiB at rest
+  and 92 MiB after (58 MiB anonymous), 53 MiB a few seconds later.
+- A `.env` file: Bun reads one in its working directory; the Rust server
+  reads its environment alone.
+- In `DATABASE_URL`: `prepare=false`, which turns off the Bun client's
+  prepared statements, is read past by the Rust server, which always
+  prepares; and the Rust server can't read an `sslkey` encrypted under
+  `sslpassword`, or reach a Unix socket not named `.s.PGSQL.<port>`. In TLS: a
+  certificate issued by a trusted CA but itself marked as a CA is accepted
+  by the Bun server and refused by the Rust one.
+- Where the Bun server answers 500 by mistake, the Rust server refuses with
+  400: an impossible `expires_at` date, an audit cursor too large for an
+  id, a request without `Host`. It also orders the audit log by id as a
+  number, and cuts an overlong passkey name between characters, not inside
+  one.
