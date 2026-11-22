@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import net from "node:net";
 import { API_CSP, enabled, rawRequest, rawStatus, SECURITY_HEADERS, Stack, waitFor } from "./harness";
 
 // The server as a process (docs/DESIGN.md §9.2, §9.3, §11): its health check,
@@ -166,6 +167,171 @@ describe.skipIf(!enabled)("the server process", () => {
       await waitFor(async () => (await fetch(`${copy.url}/.well-known/jwks.json`)).status === 200, "the copy to start", 20_000);
       expect(await copy.stop()).toBe(0);
     });
+
+  describe("the HTTP layer", () => {
+    // Writes each step (a pause first, if it has one) and collects what comes
+    // back until the server closes or `waitMs` passes.
+    type Step = string | Buffer | { pauseMs: number; send: string };
+    function exchange(steps: Step[], waitMs = 1500): Promise<{ data: string; closedAfterMs: number | null }> {
+      return new Promise((done) => {
+        const started = Date.now();
+        const socket = net.connect(stack.port, "127.0.0.1");
+        let data = "";
+        const timer = setTimeout(() => {
+          socket.destroy();
+          done({ data, closedAfterMs: null });
+        }, waitMs);
+        socket.on("data", (d) => (data += d.toString("latin1")));
+        socket.on("error", () => {});
+        socket.on("close", () => {
+          clearTimeout(timer);
+          done({ data, closedAfterMs: Date.now() - started });
+        });
+        socket.on("connect", async () => {
+          for (const step of steps) {
+            if (typeof step === "object" && "pauseMs" in step) {
+              await Bun.sleep(step.pauseMs);
+              if (!socket.destroyed) socket.write(step.send);
+            } else if (!socket.destroyed) socket.write(step);
+          }
+        });
+      });
+    }
+    const statuses = (data: string) => [...data.matchAll(/HTTP\/1\.[01] (\d{3})/g)].map((m) => Number(m[1]));
+    const bodyOf = (data: string) => data.split("\r\n\r\n")[1] ?? "";
+    const H = "Host: 127.0.0.1\r\n";
+    // A GET /healthz head of exactly `size` bytes, the excess in one header or in the query.
+    const head = (size: number, where: "header" | "query" = "header") => {
+      const base = where === "header" ? `GET /healthz HTTP/1.1\r\n${H}Connection: close\r\nX-Pad: \r\n\r\n` : `GET /healthz? HTTP/1.1\r\n${H}Connection: close\r\n\r\n`;
+      const pad = "a".repeat(size - base.length);
+      return where === "header" ? base.replace("X-Pad: ", `X-Pad: ${pad}`) : base.replace("/healthz? ", `/healthz?${pad} `);
+    };
+    const post = (headers: string, body: string) => `POST /oauth/token HTTP/1.1\r\n${H}Content-Type: application/x-www-form-urlencoded\r\n${headers}Connection: close\r\n\r\n${body}`;
+    const refusedBare = (data: string, status: number) => {
+      expect(statuses(data)).toEqual([status]);
+      expect(bodyOf(data)).toBe("");
+    };
+
+    test.each([["header"], ["query"]] as const)("a request head of 16 KiB is read; one byte more is 431, the connection closed (the excess in the %s)", async (where) => {
+      expect(head(16_384, where)).toHaveLength(16_384);
+      const ok = await exchange([head(16_384, where)]);
+      expect(statuses(ok.data)).toEqual([200]);
+      const over = await exchange([head(16_385, where)]);
+      refusedBare(over.data, 431);
+      expect(over.closedAfterMs).not.toBeNull();
+    });
+
+    test("198 headers are read; 199 are 431", async () => {
+      const withHeaders = (n: number) => `GET /healthz HTTP/1.1\r\n${H}Connection: close\r\n${Array.from({ length: n - 2 }, (_, i) => `X-H${i}: v\r\n`).join("")}\r\n`;
+      expect(statuses((await exchange([withHeaders(198)])).data)).toEqual([200]);
+      refusedBare((await exchange([withHeaders(199)])).data, 431);
+    });
+
+    const KNOWN = ["GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH", "PURGE", "PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK", "SEARCH", "REPORT", "MKACTIVITY", "CHECKOUT", "MERGE", "M-SEARCH", "NOTIFY", "SUBSCRIBE", "UNSUBSCRIBE", "ACL", "BIND", "UNBIND", "REBIND", "LINK", "UNLINK", "SOURCE", "QUERY", "MKCALENDAR"];
+    test("every method the server knows reaches the router", async () => {
+      for (const method of KNOWN) {
+        const { data } = await exchange([`${method} /healthz HTTP/1.1\r\n${H}Content-Length: 0\r\nConnection: close\r\n\r\n`]);
+        expect([method, statuses(data)]).toEqual([method, [method === "GET" ? 200 : 405]]);
+      }
+    });
+
+    test.each(["FOO", "FOO-BAR", "get", "Get", "G-ET", "DESCRIBE", "PRI", "A"])("%s, an unknown method of letters, closes the connection unanswered", async (method) => {
+      const { data, closedAfterMs } = await exchange([`${method} /healthz HTTP/1.1\r\n${H}Connection: close\r\n\r\n`]);
+      expect(data).toBe("");
+      expect(closedAfterMs).not.toBeNull();
+    });
+
+    test.each(["G_ET", "G1", "GET1", "1GET", "G.ET", "G~ET", "G!ET", "_", "1"])("%s, a method with other characters, is a bad request", async (method) => {
+      refusedBare((await exchange([`${method} /healthz HTTP/1.1\r\n${H}Connection: close\r\n\r\n`])).data, 400);
+    });
+
+    test.each([
+      ["two lengths", post("Content-Length: 3\r\nContent-Length: 4\r\n", "a=bc")],
+      ["a list of lengths", post("Content-Length: 3, 3\r\n", "a=b")],
+      ["a length that isn't a number", post("Content-Length: abc\r\n", "a=b")],
+      ["a negative length", post("Content-Length: -1\r\n", "a=b")],
+      ["a signed length", post("Content-Length: +3\r\n", "a=b")],
+      ["chunked after another coding", post("Transfer-Encoding: gzip, chunked\r\n", "3\r\na=b\r\n0\r\n\r\n")],
+      ["chunked twice in one header", post("Transfer-Encoding: chunked, chunked\r\n", "3\r\na=b\r\n0\r\n\r\n")],
+      ["Transfer-Encoding twice", post("Transfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n", "3\r\na=b\r\n0\r\n\r\n")],
+      ["a coding other than chunked", post("Transfer-Encoding: identity\r\n", "a=b")],
+      ["a chunk size that isn't hex", post("Transfer-Encoding: chunked\r\n", "zz\r\na=b\r\n0\r\n\r\n")],
+      ["a chunk size past any length", post("Transfer-Encoding: chunked\r\n", "ffffffffffffffffff\r\na=b\r\n0\r\n\r\n")],
+      ["a chunk without its line end", post("Transfer-Encoding: chunked\r\n", "3\r\na=bXX0\r\n\r\n")],
+      ["trailers after the last chunk", post("Transfer-Encoding: chunked\r\n", "3\r\na=b\r\n0\r\nX-T: 1\r\n\r\n")],
+      ["a folded header line", `GET /healthz HTTP/1.1\r\n${H}X-A: a\r\n b\r\nConnection: close\r\n\r\n`],
+      ["a space before a header's colon", `GET /healthz HTTP/1.1\r\nHost : 127.0.0.1\r\nConnection: close\r\n\r\n`],
+      ["a header line without a colon", `GET /healthz HTTP/1.1\r\n${H}Garbage\r\nConnection: close\r\n\r\n`],
+      ["a header without a name", `GET /healthz HTTP/1.1\r\n${H}: v\r\nConnection: close\r\n\r\n`],
+      ["a header name with a parenthesis", `GET /healthz HTTP/1.1\r\n${H}X(A): b\r\nConnection: close\r\n\r\n`],
+      ["a NUL in a header value", `GET /healthz HTTP/1.1\r\n${H}X-A: a\u0000b\r\nConnection: close\r\n\r\n`],
+      ["a method with a space", `GE T /healthz HTTP/1.1\r\n${H}Connection: close\r\n\r\n`],
+      ["* as the target", `OPTIONS * HTTP/1.1\r\n${H}Connection: close\r\n\r\n`],
+      ["a target without its leading slash", `GET healthz HTTP/1.1\r\n${H}Connection: close\r\n\r\n`],
+    ])("%s is refused bare with 400", async (_, request) => {
+      const { data, closedAfterMs } = await exchange([request]);
+      refusedBare(data, 400);
+      expect(closedAfterMs).not.toBeNull();
+    });
+
+    test.each([
+      ["Transfer-Encoding in another case", post("Transfer-Encoding: Chunked\r\n", "3\r\na=b\r\n0\r\n\r\n")],
+      ["a chunk extension", post("Transfer-Encoding: chunked\r\n", "3;ext=1\r\na=b\r\n0\r\n\r\n")],
+      ["a length given twice alike", post("Content-Length: 3\r\nContent-Length: 3\r\n", "a=b")],
+      ["spaces around a length", post("Content-Length:  3 \r\n", "a=b")],
+      ["an Expect the server doesn't know", post("Expect: something\r\nContent-Length: 3\r\n", "a=b")],
+    ])("%s is read", async (_, request) => {
+      // Read, and refused for what it lacks: a client.
+      expect(statuses((await exchange([request])).data)).toEqual([401]);
+    });
+
+    test("Expect: 100-continue is answered 100 before the body is sent", async () => {
+      const { data } = await exchange([`POST /oauth/token HTTP/1.1\r\n${H}Content-Type: application/x-www-form-urlencoded\r\nExpect: 100-continue\r\nContent-Length: 3\r\nConnection: close\r\n\r\n`, { pauseMs: 500, send: "a=b" }]);
+      expect(statuses(data)).toEqual([100, 401]);
+    });
+
+    test.each([[`http://127.0.0.1/healthz`], ["http://elsewhere.example.com/healthz"]])("an absolute URL, %s, as the target is served", async (target) => {
+      expect(statuses((await exchange([`GET ${target} HTTP/1.1\r\n${H}Connection: close\r\n\r\n`])).data)).toEqual([200]);
+    });
+
+    test.each([["asked to keep it", "Connection: keep-alive\r\n"], ["not asked", ""]])("HTTP/1.0 gets one answer, then the connection is closed, %s", async (_, extra) => {
+      const { data, closedAfterMs } = await exchange([`GET /healthz HTTP/1.0\r\n${H}${extra}\r\n`]);
+      expect(statuses(data)).toEqual([200]);
+      expect(closedAfterMs).not.toBeNull();
+    });
+
+    test("HTTP/1.1 keeps the connection for the next request", async () => {
+      const socket = net.connect(stack.port, "127.0.0.1");
+      let data = "";
+      socket.on("data", (d) => {
+        data += d.toString("latin1");
+        if (statuses(data).length === 1) socket.write(`GET /nope HTTP/1.1\r\n${H}\r\n`);
+      });
+      socket.on("connect", () => socket.write(`GET /healthz HTTP/1.1\r\n${H}\r\n`));
+      await waitFor(() => statuses(data).length === 2, "two answers on one connection");
+      socket.destroy();
+      expect(statuses(data)).toEqual([200, 404]);
+    });
+
+    // Bun closes on a timer that ticks every few seconds, so after 8 to 13
+    // seconds; the Rust server after 10.
+    test("a connection that doesn't finish its request is closed unanswered after about ten seconds", async () => {
+      const stalled: [string, Step[]][] = [
+        ["idle after an answer", [`GET /healthz HTTP/1.1\r\n${H}\r\n`]],
+        ["silent", []],
+        ["half a request line", ["GET /heal"]],
+        ["headers unfinished", [`GET /healthz HTTP/1.1\r\n${H}X-A: b\r\n`]],
+        ["a header trickled a byte a second", ["GET /healthz HTTP/1.1\r\nX-Slow: ", ...Array.from({ length: 25 }, () => ({ pauseMs: 1000, send: "a" }))]],
+        ["a body unfinished", [post("Content-Length: 100\r\n", "a=b").replace("Connection: close\r\n", "")]],
+        ["a body trickled a byte a second", [post("Content-Length: 30\r\n", "").replace("Connection: close\r\n", ""), ...Array.from({ length: 29 }, () => ({ pauseMs: 1000, send: "a" }))]],
+      ];
+      const outcomes = await Promise.all(stalled.map(async ([what, steps]) => [what, await exchange(steps, 20_000)] as const));
+      for (const [what, { data, closedAfterMs }] of outcomes) {
+        expect([what, statuses(data)]).toEqual([what, what === "idle after an answer" ? [200] : []]);
+        expect([what, closedAfterMs !== null && closedAfterMs >= 7_000 && closedAfterMs <= 16_000]).toEqual([what, true]);
+      }
+    }, 40_000);
+  });
 
   describe("the Host header", () => {
     const get = (host: string | null, version: string) =>

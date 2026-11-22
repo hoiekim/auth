@@ -505,6 +505,7 @@ auth.logoutUrl(postLogoutRedirect?)
 - **Lists:** `{"items": […], "next": "<cursor>" | null}`. The lists that can grow long (users, invites, audit) take `?after=<cursor>&limit=` (default 50, at most 100); the others answer everything at once, with `next: null`.
 - **No NUL in a `/v1/` query parameter:** Postgres's text can't hold one, so it is `400 invalid_request`.
 - **A request whose `Host` doesn't make a URL** (missing, or with a path, a user or a character a host can't hold) is answered `400` with no body and the connection closed, and isn't logged: its path can carry a secret.
+- **A body is framed one way:** by a `Content-Length` (repeated only with the same value), or by chunked coding alone, without trailers. Any other framing is answered `400` with no body; the one exception, a length beside chunked coding, is in §16. A method auth doesn't know (of letters and dashes) closes the connection unanswered; one with other characters is `400`.
 - **A `return_to` is a local path of printable ASCII**, as every path auth writes is; anything else leads to `/account`.
 - **IDs** are prefixed by type: `usr_`, `ses_`, `apw_`, `key_`, `inv_`, `evt_`, `pk_` (passkeys). Timestamps are RFC 3339 UTC.
 - **Versioning:** the path is `/v1`. Additive changes don't bump it, and clients ignore unknown fields.
@@ -822,6 +823,7 @@ Counters live in the `throttle` table, so every copy shares them and a restart d
 | A recovery code outside a sign-in (the U6 reset) | the per-account and per-IP sign-in limits above |
 | Emails from sign-up, the reset page, a change of one's own email, and invitations | 3 per hour per address, and 10 per hour per sender: the IP on auth's pages, the signed-in user or the app's client on the API; the answer is the same whether or not the address exists. The activation and reset links an `auth:admin` sends aren't counted. |
 | Account creation (sign-up on an open service, a new account from an invitation, or, once platform sign-in is built, a first platform sign-in, §12.3) | 10 per hour per IP |
+| A request, on any connection | A head of at most 16 KiB and 198 headers (`431` past either), a body of at most 64 KiB (`413`), and about 10 seconds to send a request, or between requests on a kept connection, after which the connection is closed unanswered. HTTP/1.0 gets one answer per connection. |
 | `/oauth/token` per client | 60 per minute |
 | `/oauth/introspect` per client | 600 per minute. Failures are counted per client (1000 an hour) and per end-user address the client names (10 per 15 minutes; the exception above), so a protocol server's brute-force limits stay effective. Past either, the answer is `429`. A back channel through the proxy arrives with the proxy's `X-Real-IP`, the client's own address; that one keys no per-address counter, which would put all the client's users in one bucket. |
 
@@ -1100,3 +1102,16 @@ with `--locked`. A deployment that runs the Rust image trusts that list where
   `sslpassword`, or reach a Unix socket not named `.s.PGSQL.<port>`. In TLS: a
   certificate issued by a trusted CA but itself marked as a CA is accepted
   by the Bun server and refused by the Rust one.
+- Where the HTTP parsers differ underneath (§9.4's limits and §7.7's
+  framing hold for both): requests pipelined into one packet go unanswered
+  by the Bun server and are answered in order by the Rust one; an HTTP
+  version other than 1.0 or 1.1, or lines ended by a bare LF, are `505`
+  from the Bun server, where the Rust server answers `400` to the version
+  and reads the bare LF; a DEL in a header value is read by the Bun server
+  and `400` from the Rust one; an HTTP/2 preface is `400` from the Bun
+  server and closed unanswered by the Rust one; and a body with both a
+  `Content-Length` and chunked coding is `400` from the Bun server, while
+  the Rust server reads it chunked and closes the connection after
+  answering, which leaves nothing on it to smuggle. The Bun server's
+  timeout ticks every few seconds, so it closes a stalled connection after
+  8 to 13 seconds; the Rust server after 10.

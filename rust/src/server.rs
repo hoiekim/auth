@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, Limited};
@@ -195,7 +195,94 @@ fn refuse(status: u16) -> HyperResponse {
     to_hyper(Response { status, headers: vec![("Connection".to_string(), "close".to_string())], body: Vec::new() })
 }
 
-async fn serve_request(app: App, router: Arc<Router>, peer: SocketAddr, req: hyper::Request<Incoming>) -> std::result::Result<HyperResponse, std::convert::Infallible> {
+// The HTTP layer as Bun's (docs/DESIGN.md §16): a request head of at most
+// 16 KiB and 198 headers (431 past either); 10 seconds to send the head, or
+// to send the body once the head is in, or between requests on a kept
+// connection, after which the connection is closed unanswered.
+const MAX_HEAD_BYTES: usize = 16_384;
+const MAX_HEADERS: usize = 198;
+const READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+// The methods Bun's parser knows. Another, of letters and dashes alone, closes
+// the connection unanswered; one with any other character is a bad request.
+const KNOWN_METHODS: [&str; 35] = [
+    "GET",
+    "HEAD",
+    "POST",
+    "PUT",
+    "DELETE",
+    "CONNECT",
+    "OPTIONS",
+    "TRACE",
+    "PATCH",
+    "PURGE",
+    "PROPFIND",
+    "PROPPATCH",
+    "MKCOL",
+    "COPY",
+    "MOVE",
+    "LOCK",
+    "UNLOCK",
+    "SEARCH",
+    "REPORT",
+    "MKACTIVITY",
+    "CHECKOUT",
+    "MERGE",
+    "M-SEARCH",
+    "NOTIFY",
+    "SUBSCRIBE",
+    "UNSUBSCRIBE",
+    "ACL",
+    "BIND",
+    "UNBIND",
+    "REBIND",
+    "LINK",
+    "UNLINK",
+    "SOURCE",
+    "QUERY",
+    "MKCALENDAR",
+];
+
+/// Ends the connection with no answer: hyper drops a connection whose
+/// service fails.
+#[derive(Debug)]
+struct Unanswered;
+
+impl std::fmt::Display for Unanswered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("closed unanswered")
+    }
+}
+
+impl std::error::Error for Unanswered {}
+
+async fn serve_request(app: App, router: Arc<Router>, peer: SocketAddr, req: hyper::Request<Incoming>) -> std::result::Result<HyperResponse, Unanswered> {
+    // HTTP/1.0 gets one answer, as from Bun, whatever it asks. Said in
+    // HTTP/1.0, so hyper adds no keep-alive to the close.
+    let one_off = req.version() == hyper::Version::HTTP_10;
+    let mut res = answer(app, router, peer, req).await?;
+    if one_off {
+        *res.version_mut() = hyper::Version::HTTP_10;
+        res.headers_mut().insert(hyper::header::CONNECTION, hyper::header::HeaderValue::from_static("close"));
+    }
+    Ok(res)
+}
+
+async fn answer(app: App, router: Arc<Router>, peer: SocketAddr, req: hyper::Request<Incoming>) -> std::result::Result<HyperResponse, Unanswered> {
+    let body_deadline = tokio::time::Instant::now() + READ_TIMEOUT;
+    let method = req.method().as_str();
+    if !KNOWN_METHODS.contains(&method) {
+        if method.bytes().all(|b| b.is_ascii_alphabetic() || b == b'-') {
+            return Err(Unanswered);
+        }
+        return Ok(refuse(400));
+    }
+    // A path, or an absolute URL; not `*` or a bare authority.
+    let uri = req.uri();
+    let origin_form = uri.scheme().is_none() && uri.authority().is_none() && uri.path().starts_with('/');
+    if !origin_form && uri.scheme().is_none() {
+        return Ok(refuse(400));
+    }
     let (parts, body) = req.into_parts();
     let mut headers: Vec<(String, String)> = Vec::with_capacity(parts.headers.len());
     for (name, value) in &parts.headers {
@@ -221,6 +308,13 @@ async fn serve_request(app: App, router: Arc<Router>, peer: SocketAddr, req: hyp
     let peer_ip = peer.ip().to_canonical().to_string();
     let ip = client_ip(Some(&peer_ip), (!real_ip.is_empty()).then(|| real_ip.join(", ")).as_deref(), &app.config.trusted_proxies);
 
+    // A body framed only one way: chunked alone, once, without a length.
+    // Anything else is how one reader can be told apart from another.
+    let encodings: Vec<&str> = headers.iter().filter(|(n, _)| n == "transfer-encoding").map(|(_, v)| v.as_str()).collect();
+    if !encodings.is_empty() && (encodings.len() > 1 || !encodings[0].trim().eq_ignore_ascii_case("chunked") || header("content-length").is_some()) {
+        return Ok(refuse(400));
+    }
+
     // Every body is capped before it is parsed (§10).
     let mut bytes = Vec::new();
     if method != "GET" && method != "HEAD" {
@@ -228,10 +322,13 @@ async fn serve_request(app: App, router: Arc<Router>, peer: SocketAddr, req: hyp
         if declared > MAX_BODY_BYTES as u64 {
             return Ok(refuse(413));
         }
-        match Limited::new(body, MAX_BODY_BYTES).collect().await {
-            Ok(collected) => bytes = collected.to_bytes().to_vec(),
-            Err(e) if e.downcast_ref::<http_body_util::LengthLimitError>().is_some() => return Ok(refuse(413)),
-            Err(_) => return Ok(refuse(400)),
+        match tokio::time::timeout_at(body_deadline, Limited::new(body, MAX_BODY_BYTES).collect()).await {
+            Err(_) => return Err(Unanswered),
+            // Trailers after a chunked body are refused, as Bun refuses them.
+            Ok(Ok(collected)) if collected.trailers().is_some() => return Ok(refuse(400)),
+            Ok(Ok(collected)) => bytes = collected.to_bytes().to_vec(),
+            Ok(Err(e)) if e.downcast_ref::<http_body_util::LengthLimitError>().is_some() => return Ok(refuse(413)),
+            Ok(Err(_)) => return Ok(refuse(400)),
         }
     }
 
@@ -247,7 +344,7 @@ async fn serve_request(app: App, router: Arc<Router>, peer: SocketAddr, req: hyp
 /// Serves until `stop` settles, then finishes the requests in flight.
 pub async fn serve(app: App, router: Arc<Router>, listener: TcpListener, stop: impl Future<Output = ()>) {
     let mut http = hyper::server::conn::http1::Builder::new();
-    http.title_case_headers(true).timer(TokioTimer::new());
+    http.title_case_headers(true).timer(TokioTimer::new()).max_header_size(MAX_HEAD_BYTES).max_headers(MAX_HEADERS).header_read_timeout(READ_TIMEOUT);
     let graceful = GracefulShutdown::new();
     tokio::pin!(stop);
     loop {
