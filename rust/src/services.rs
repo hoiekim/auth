@@ -243,6 +243,8 @@ pub fn parse_services(text: &str) -> (Services, Vec<String>) {
     let Some(doc) = crate::json::parse(text) else {
         return (empty(), vec!["the services file is not valid JSON".into()]);
     };
+    // A file can nest as deep as it is long.
+    let doc = crate::json::Held(doc);
     let Some(list) = doc.as_object().and_then(|d| d.get("services")).and_then(Value::as_array) else {
         return (empty(), vec!["the services file must be an object with a \"services\" array".into()]);
     };
@@ -466,6 +468,31 @@ pub fn service_json(s: &Service, secrets: &HashMap<String, Vec<DateTime<Utc>>>) 
     })
 }
 
+// A problem names a bad value as JSON, unless it nests deeper than any
+// definition does: printing recurses, and a services file can nest millions
+// of levels deep. The Bun server draws the same line.
+const SHOWN_DEPTH: usize = 64;
+
+fn too_deep() -> String {
+    format!("an entry nested more than {SHOWN_DEPTH} levels deep")
+}
+
+fn nests_deeper(value: &Value) -> bool {
+    let mut pending = vec![(value, 1)];
+    while let Some((v, depth)) = pending.pop() {
+        let children: Box<dyn Iterator<Item = &Value>> = match v {
+            Value::Array(items) => Box::new(items.iter()),
+            Value::Object(map) => Box::new(map.values()),
+            _ => continue,
+        };
+        if depth > SHOWN_DEPTH {
+            return true;
+        }
+        pending.extend(children.map(|c| (c, depth + 1)));
+    }
+    false
+}
+
 fn string_list(value: Option<&Value>, pattern: fn(&str) -> bool, field: &str, problems: &mut Vec<String>, required: bool, non_empty: bool) -> Vec<String> {
     if value.is_none() && !required {
         return Vec::new();
@@ -477,6 +504,7 @@ fn string_list(value: Option<&Value>, pattern: fn(&str) -> bool, field: &str, pr
     let mut out: Vec<String> = Vec::new();
     for v in list {
         match v.as_str().filter(|s| pattern(s)) {
+            None if nests_deeper(v) => problems.push(format!("{field} has {}", too_deep())),
             None => problems.push(format!("{field} has an invalid name {v}")),
             Some(s) if out.iter().any(|o| o == s) => problems.push(format!("{field} lists \"{s}\" twice")),
             Some(s) => out.push(s.to_string()),
@@ -509,7 +537,13 @@ fn uri_list(value: Option<&Value>, public: bool, field: &str, problems: &mut Vec
             out.push(v.as_str().unwrap().to_string());
         } else {
             // A URI with credentials in it is named without them.
-            let shown = if credentials { "a URI with credentials".to_string() } else { v.to_string() };
+            let shown = if credentials {
+                "a URI with credentials".to_string()
+            } else if nests_deeper(v) {
+                too_deep()
+            } else {
+                v.to_string()
+            };
             problems.push(format!("{field} has {shown}, which is not an https URI, an http URI on a loopback host, or (for a public client) a private-use scheme"));
         }
     }

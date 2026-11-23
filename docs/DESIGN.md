@@ -239,7 +239,7 @@ The fields of a service:
 | `clients` | yes | One or more, each with an `id` unique across every service (`[a-z0-9][a-z0-9._-]{0,63}`), a `type` (`confidential` or `public`), `redirect_uris` and optional `post_logout_redirect_uris`. Both lists hold absolute URIs without a fragment or credentials: `https`, `http` only for a loopback host (`localhost`, `127.0.0.1` or `[::1]`, RFC 8252 §7.3), or, for a public client, a private-use scheme that is a reverse domain name with a dot, such as `com.example.tasks:` (RFC 8252 §7.1). A registered client's `id` and `type` never change (§6.2). |
 | `events_url` | no | Where §7.4's events go: an `http` or `https` URL, on any host, without credentials or a fragment. A service without one relies on the pull (§7.1), and on reading its pending invites (§12.6). |
 
-The file is checked at start, like every other setting: a file that breaks any rule above stops the start, and every problem is listed at once. An unknown field is a problem too. A registration is checked against the same rules and refused with every problem listed. Where the file would leave a field out, it may also write `[]` for a list, or `null` for `default_role` and `events_url`, as `GET /v1/services` answers. The `source`, `secrets` and `held` fields that `GET`, `POST` and `PUT` add to their answers are not part of a definition: a body that carries them is refused for its unknown fields. It is capped so that every copy can hold every service: at most 100 registered services, each with at most 32 roles, 32 scopes of each kind and 5 clients, each client with at most 10 redirect URIs and 10 sign-out URIs, and each URI at most 1024 characters.
+The file is checked at start, like every other setting: a file that breaks any rule above stops the start, and every problem is listed at once. An unknown field is a problem too. A problem names a bad entry as JSON, or, when it nests more than 64 levels deep, says so. A registration is checked against the same rules and refused with every problem listed. Where the file would leave a field out, it may also write `[]` for a list, or `null` for `default_role` and `events_url`, as `GET /v1/services` answers. The `source`, `secrets` and `held` fields that `GET`, `POST` and `PUT` add to their answers are not part of a definition: a body that carries them is refused for its unknown fields. It is capped so that every copy can hold every service: at most 100 registered services, each with at most 32 roles, 32 scopes of each kind and 5 clients, each client with at most 10 redirect URIs and 10 sign-out URIs, and each URI at most 1024 characters.
 
 Rules, in full:
 1. **Default deny.** No access row means no sign-in to the service: auth answers 403 with a page that says "you don't have access to wiki", and issues no code (a `prompt=none` request gets `access_denied`). The one exception is a service with `signup: "open"`, which gives a signed-in user without a row its `default_role`, and writes that row.
@@ -432,7 +432,7 @@ An app password or API key is made only for a service whose definition declares 
 | Method and path | Purpose |
 |---|---|
 | `GET /v1/users?q=&after=&limit=` ★ | List or search. A service's client sees only the enabled users with a role on its service, each as `{id, username, name, role}`, and its `q` matches the start of a username or name, or a whole email ignoring case, so it can't list addresses. |
-| `POST /v1/users` | `{username, name, email, kind?}`, then emails an activation link. A bot (`kind: "bot"`) has no email and takes `owner_id`, a person, defaulting to the calling admin. |
+| `POST /v1/users` | `{username, name, email, kind?}`, then emails an activation link. A bot (`kind: "bot"`) has no email and takes `owner_id`, a person, defaulting to the calling admin; an `owner_id` that isn't a string names no one (`404`). |
 | `GET` / `PATCH` / `DELETE /v1/users/{id}` | `GET` adds the user's second factors and access. `PATCH {name?, email?, disabled?, owner_id?}`: `disabled` `true` disables and `false` enables again; a person's new `email` is unverified, voids the links sent to the old one, and gets the activation link of an account not yet activated (`409` when another account uses it), and the old address gets a notice; a bot's `owner_id` can be changed. A person who owns bots can't be deleted until they're deleted or given another owner (`409`). |
 | `GET` / `POST` / `DELETE /v1/users/{id}/app-passwords[/{id}]`, `…/api-keys[/{id}]` | A bot user's app passwords and API keys (A9), which it can't manage itself; refused for a person (`409`). Making or revoking one needs the recent sign-in a credential change does, and is alerted; making one also emails the bot's owner |
 | `PUT /v1/users/{id}/access/{service}` ★ | `{role}`. Idempotent, so it creates or changes. |
@@ -1063,7 +1063,10 @@ how JSON and CBOR text are read (`JSON.parse`, `TextDecoder`).
 The Rust server reproduces those too. `rust/tests/database_urls.json`
 records Bun's reading of each case, CI checks that the Bun it runs still
 reads them so, and the Rust server's tests check its own reading against
-them. A change to behaviour is made in both, with a test both pass.
+them. `JSON.parse` has no depth limit, so neither server may recurse through
+a parsed value on a stack that can't hold it: the deepest 64 KiB body nests
+32,000 levels, and a services file or an import line millions. A change to
+behaviour is made in both, with a test both pass.
 
 **Dependencies.** The Rust server has no runtime's built-ins to lean on, so
 it has crates in their place. These are all of `rust/Cargo.toml`'s, which

@@ -119,6 +119,12 @@ function likePrefix(q: string): string {
   return `${q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
 }
 
+// An id from a body: one that isn't a string can only miss. String() would
+// turn ["usr_…"] into that user's id, and recurse through a deep array.
+function idOf(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
 async function userOr404(app: App, id: string): Promise<UserRow> {
   const user = ID_PATTERN.test(id) ? await findUser(app.sql, id) : null;
   if (!user) throw new HttpError(404, "not_found", "No such user.");
@@ -494,7 +500,7 @@ export async function createUser({ req, ip, deps: app }: Ctx<App>): Promise<Resp
   let email: string | null = null;
   if (kind === "bot") {
     if (body.email !== undefined && body.email !== null) throw new HttpError(400, "invalid_request", "A bot user has no email.");
-    ownerId = body.owner_id === undefined ? c.session.userId : String(body.owner_id);
+    ownerId = body.owner_id === undefined ? c.session.userId : idOf(body.owner_id);
     const owner = await userOr404(app, ownerId);
     if (owner.kind !== "person") throw new HttpError(400, "invalid_request", "A bot's owner is a person.");
   } else {
@@ -538,7 +544,7 @@ export async function patchUser({ req, params, ip, deps: app }: Ctx<App>): Promi
   let ownerId: string | null = null;
   if (body.owner_id !== undefined) {
     if (user.kind !== "bot") throw new HttpError(400, "invalid_request", "Only a bot user has an owner.");
-    const owner = await userOr404(app, String(body.owner_id));
+    const owner = await userOr404(app, idOf(body.owner_id));
     if (owner.kind !== "person") throw new HttpError(400, "invalid_request", "A bot's owner is a person.");
     ownerId = owner.id;
   }

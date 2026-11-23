@@ -10,6 +10,7 @@ import {
   decodeJwt,
   defaultServices,
   enabled,
+  nest,
   newId,
   pkce,
   sha256,
@@ -531,6 +532,18 @@ describe.skipIf(!enabled)("registered services", () => {
         );
       });
 
+      test("a problem shows a value nested up to 64 levels deep; past that, and as deep as the body holds, it says so", async () => {
+        const nested = (levels: number) => "[".repeat(levels) + "]".repeat(levels);
+        const name = sname();
+        const definition = (roles: string) => JSON.stringify(def(name, { roles: ["member", "<roles>"], mfa_roles: [] })).replace('"<roles>"', roles);
+        await expectError(await register(definition(nested(64))), 400, "invalid_request", `roles has an invalid name ${nested(64)}`);
+        await expectError(await register(definition(nested(65))), 400, "invalid_request", "roles has an entry nested more than 64 levels deep");
+        await expectError(await register(nest(definition("<nest>"))), 400, "invalid_request", "roles has an entry nested more than 64 levels deep");
+        const uris = (uri: string) => JSON.stringify(def(name, { clients: [{ id: name, type: "confidential", redirect_uris: ["<uri>"] }] })).replace('"<uri>"', uri);
+        await expectError(await register(uris(nested(64))), 400, "invalid_request", `clients[0]: redirect_uris has ${nested(64)}, ${URI_RULE}`);
+        await expectError(await register(nest(uris("<nest>"))), 400, "invalid_request", `clients[0]: redirect_uris has an entry nested more than 64 levels deep, ${URI_RULE}`);
+      });
+
       test("the body must be a JSON object sent as application/json", async () => {
         await expectError(await root.api("POST", "/v1/services", "{", {}), 400, "invalid_request", "The body is not valid JSON.");
         await expectError(await root.api("POST", "/v1/services", "[]", {}), 400, "invalid_request", "The body must be a JSON object.");
@@ -1009,6 +1022,15 @@ describe.skipIf(!enabled)("registered services", () => {
       expect(lines[0]).toBe("invalid configuration:");
       return lines.slice(1);
     }
+
+    test("a file nested millions of levels deep is read as JSON.parse reads it", async () => {
+      // Far deeper than any stack holds through a recursive drop.
+      const deep = (template: string) => nest(template, 2_000_000);
+      expect(await refused(deep(`{"services":${JSON.stringify([svc()])},"extra":<nest>}`))).toEqual(['  - SERVICES_FILE: the services file has an unknown field "extra"']);
+      expect(await refused(deep(JSON.stringify({ services: [svc({ roles: ["member", "<nest>"], mfa_roles: [] })] })))).toEqual(['  - SERVICES_FILE: service "wiki": roles has an entry nested more than 64 levels deep']);
+      const uris = JSON.stringify({ services: [svc({ clients: [{ id: "wiki", type: "confidential", redirect_uris: ["<nest>"] }] })] });
+      expect(await refused(deep(uris))).toEqual([`  - SERVICES_FILE: service "wiki": clients[0]: redirect_uris has an entry nested more than 64 levels deep, ${URI_RULE}`]);
+    });
 
     test.each([
       ["not JSON", "{", ["the services file is not valid JSON"]],

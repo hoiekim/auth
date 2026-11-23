@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { SoftAuthenticator } from "../src/testing/authenticator";
-import { backChannel, type Browser, defaultServices, enabled, linkIn, newId, REDIRECTS, sha1Hex, sha256, signInTo, Stack, type TestUser, totp, waitFor } from "./harness";
+import { backChannel, type Browser, defaultServices, enabled, linkIn, nest, newId, REDIRECTS, sha1Hex, sha256, signInTo, Stack, type TestUser, totp, waitFor } from "./harness";
 
 // The pages around an account's life (docs/DESIGN.md U5–U7, §7.5, §9.1,
 // §9.4): sign-up, invitations, activation, password reset and email
@@ -1458,6 +1458,17 @@ describe.skipIf(!enabled)("account flows", () => {
       // Five attempts: the sixth is held.
       const d = stack.browser();
       await expectMessage(await d.form("/reset/confirm", { token, password: NEW_PW, passkey: await assertion(d, authenticator) }), 429, "Too many attempts", "Too many wrong codes. Try again later.", back(token));
+    });
+
+    test("passkey only: a passkey field nested as deep as the body holds is a malformed one", async () => {
+      const u = await stack.user({ username: uname("pd") });
+      await withPasskey(u);
+      const token = await issue("reset", u.id, u.email);
+      const b = stack.browser();
+      const fields = new URLSearchParams({ token, password: NEW_PW, csrf: await b.formCsrf() });
+      const res = await b.request("/reset/confirm", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: nest(`${fields}&passkey=<nest>`) });
+      await expectMessage(res, 401, "Second factor didn't work", "That code or passkey didn't work.", back(token));
+      expect(await auditFor("reset.fail", u.id)).toHaveLength(1);
     });
 
     test("passkey only: an assertion's challenge works once", async () => {

@@ -326,6 +326,17 @@ export class ServerProcess {
 // One request written byte for byte, for what fetch won't send. Answers with
 // everything the server wrote back, once a whole response has arrived, the
 // connection has closed, or `waitMs` has passed.
+// `template` with its `<nest>` (or `"<nest>"`) replaced by arrays nested as
+// deep as fit in `bytes`: 32,000 levels and more in a request body, millions
+// in a file. JSON.parse takes any depth, so whatever a server parses it must
+// also hold and let go of, however deep.
+export function nest(template: string, bytes = 64 * 1024): string {
+  const marker = /"?<nest>"?/.exec(template);
+  if (!marker) throw new Error("the template has no <nest>");
+  const depth = Math.floor((bytes - Buffer.byteLength(template) + marker[0].length) / 2);
+  return template.slice(0, marker.index) + "[".repeat(depth) + "]".repeat(depth) + template.slice(marker.index + marker[0].length);
+}
+
 export function rawRequest(port: number, data: string | Uint8Array, waitMs = 2000): Promise<string> {
   return new Promise((resolveResponse) => {
     const socket = net.connect(port, "127.0.0.1");
