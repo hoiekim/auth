@@ -58,12 +58,33 @@ use crate::app::App;
 use crate::config::{load_config, ConfigError};
 use crate::error::{Error, Result};
 
+// A parsed JSON value can nest as deep as its input: 32,768 levels in a
+// 64 KiB request body, as `JSON.parse` takes it (rust/src/json.rs). Dropping,
+// cloning, comparing or printing a serde_json value takes a stack frame for
+// each level, up to about 250 bytes in a release build, so 8 MiB for that
+// body; the 2 MiB a thread gets by default would let one request abort the
+// process. Values from larger inputs, an import or the services file, are
+// held in `json::Held`, which takes them apart without recursion.
+const STACK_BYTES: usize = 32 * 1024 * 1024;
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("the async runtime");
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_stack_size(STACK_BYTES).enable_all().build().expect("the async runtime");
+    // On the runtime's threads, with their stacks, rather than on this one.
+    let on_runtime = |work: std::pin::Pin<Box<dyn std::future::Future<Output = u8> + Send>>| {
+        runtime.block_on(async {
+            match tokio::spawn(work).await {
+                Ok(code) => code,
+                Err(e) => std::panic::resume_unwind(e.into_panic()),
+            }
+        })
+    };
     let code = match args.first().map(String::as_str) {
-        None => runtime.block_on(serve()),
-        Some("cli") => runtime.block_on(cli::main(&args[1..])),
+        None => on_runtime(Box::pin(serve())),
+        Some("cli") => {
+            let rest = args[1..].to_vec();
+            on_runtime(Box::pin(async move { cli::main(&rest).await }))
+        }
         Some("healthcheck") => healthcheck(),
         Some(_) => {
             eprintln!(

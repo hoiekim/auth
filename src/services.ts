@@ -293,6 +293,23 @@ function isObject(v: unknown): v is Record<string, any> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+// A problem names a bad value as JSON, unless it nests deeper than any
+// definition does: JSON.stringify recurses, and a services file can nest
+// millions of levels deep. The Rust server draws the same line.
+const SHOWN_DEPTH = 64;
+const TOO_DEEP = `an entry nested more than ${SHOWN_DEPTH} levels deep`;
+
+function nestsDeeper(value: unknown, limit = SHOWN_DEPTH): boolean {
+  const pending: [unknown, number][] = [[value, 1]];
+  while (pending.length > 0) {
+    const [v, depth] = pending.pop()!;
+    if (typeof v !== "object" || v === null) continue;
+    if (depth > limit) return true;
+    for (const child of Array.isArray(v) ? v : Object.values(v)) pending.push([child, depth + 1]);
+  }
+  return false;
+}
+
 function stringList(
   value: unknown,
   pattern: RegExp,
@@ -307,7 +324,7 @@ function stringList(
   }
   const out: string[] = [];
   for (const v of value) {
-    if (typeof v !== "string" || !pattern.test(v)) p(`${field} has an invalid name ${JSON.stringify(v)}`);
+    if (typeof v !== "string" || !pattern.test(v)) p(nestsDeeper(v) ? `${field} has ${TOO_DEEP}` : `${field} has an invalid name ${JSON.stringify(v)}`);
     else if (out.includes(v)) p(`${field} lists "${v}" twice`);
     else out.push(v);
   }
@@ -343,7 +360,7 @@ function uriList(value: unknown, isPublic: boolean, field: string, p: (msg: stri
         (url.protocol === "http:" && isLoopbackHost(url.hostname)) ||
         (isPublic && PRIVATE_SCHEME.test(url.protocol)));
     // A URI with credentials in it is named without them.
-    const shown = url && (url.username || url.password) ? "a URI with credentials" : JSON.stringify(v);
+    const shown = url && (url.username || url.password) ? "a URI with credentials" : nestsDeeper(v) ? TOO_DEEP : JSON.stringify(v);
     if (!ok) p(`${field} has ${shown}, which is not an https URI, an http URI on a loopback host, or (for a public client) a private-use scheme`);
     else out.push(v as string);
   }

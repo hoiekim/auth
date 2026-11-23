@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { randomBytes } from "node:crypto";
-import { backChannel, basic, CLI, Crypt, enabled, hashPassword, ID, newId, sha256, Stack, type Exit } from "./harness";
+import { backChannel, basic, CLI, Crypt, enabled, hashPassword, ID, nest, newId, sha256, Stack, type Exit } from "./harness";
 
 // The break-glass CLI (docs/DESIGN.md §9.3, §9.6, §13; docs/DEPLOYMENT.md
 // §3): every command, every refusal and its words, what each writes, audits,
@@ -612,6 +612,13 @@ describe.skipIf(!enabled)("the break-glass CLI", () => {
   describe("import users", () => {
     const run = (input: string, ...flags: string[]) => cli(["import", "users", "-", ...flags], { stdin: input });
 
+    test("lines nested millions of levels deep are read as JSON.parse reads them", async () => {
+      // Far deeper than any stack holds through a recursive drop; 4 MB of the 8 MiB the CLI reads.
+      const ok = unique("deep");
+      const input = [nest(`{"username":"${ok}","email":"${ok}@example.com","access":<nest>}`, 2_000_000), nest("<nest>", 2_000_000)].join("\n");
+      expectExit(await run(input), 1, ["line 1: access must be an object of service: role", "line 2: not a JSON object", "nothing imported: 2 problem(s)"]);
+    });
+
     test("every per-line problem, sorted by line, with nothing written", async () => {
       const taken = await stack.user({ username: unique("taken") });
       const ok = unique("okay");
@@ -834,6 +841,12 @@ describe.skipIf(!enabled)("the break-glass CLI", () => {
       expectExit(await cli(["import", "api-keys", "--service", "nowhere", "-"], { stdin: "" }), 2, ["error: --service must name a service"]);
       expectExit(await cli(["import", "api-keys", "--service", "wiki", "-"], { stdin: "{}\n" }), 1, ["wiki declares no api_key_scopes, so it takes no API keys", "nothing imported: 1 problem(s)"]);
       expectExit(await cli(["import", "api-keys", "--service", "tasks"]), 2, ["error: name the input file, or - for standard input"]);
+    });
+
+    test("lines nested millions of levels deep are read as JSON.parse reads them", async () => {
+      const owner = await stack.user({ username: unique("owner"), access: { tasks: "user" } });
+      const line = JSON.stringify({ owner: owner.username, sha256: hex(`deep-${randomBytes(4).toString("hex")}`), scopes: "<nest>" });
+      expectExit(await run([nest(line, 2_000_000), nest("<nest>", 2_000_000)].join("\n")), 1, ["line 1: scopes must be a non-empty list from: tasks:read, tasks:write", "line 2: not a JSON object", "nothing imported: 2 problem(s)"]);
     });
 
     test("every per-line problem, sorted by line", async () => {

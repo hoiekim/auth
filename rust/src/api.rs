@@ -718,12 +718,9 @@ pub async fn list_users(ctx: Ctx) -> Result<Response> {
     Ok(json_response(200, &list_of(list, limit)))
 }
 
-// `String(value)` of a JSON value, as an id that can only miss.
-fn stringified(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
-    }
+// An id from a body: one that isn't a string can only miss.
+fn id_of(v: &Value) -> String {
+    v.as_str().unwrap_or_default().to_string()
 }
 
 pub async fn create_user(ctx: Ctx) -> Result<Response> {
@@ -744,7 +741,7 @@ pub async fn create_user(ctx: Ctx) -> Result<Response> {
         if body.get("email").is_some_and(|e| !e.is_null()) {
             bail!(400, "invalid_request", "A bot user has no email.");
         }
-        let id = body.get("owner_id").map(stringified).unwrap_or_else(|| session.user_id.clone());
+        let id = body.get("owner_id").map(id_of).unwrap_or_else(|| session.user_id.clone());
         let owner = user_or_404(app, &id).await?;
         if !owner.is_person() {
             bail!(400, "invalid_request", "A bot's owner is a person.");
@@ -809,7 +806,7 @@ pub async fn patch_user(ctx: Ctx) -> Result<Response> {
         if user.kind != "bot" {
             bail!(400, "invalid_request", "Only a bot user has an owner.");
         }
-        let owner = user_or_404(app, &stringified(given)).await?;
+        let owner = user_or_404(app, &id_of(given)).await?;
         if !owner.is_person() {
             bail!(400, "invalid_request", "A bot's owner is a person.");
         }

@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SoftAuthenticator, UP, type Edits } from "../src/testing/authenticator";
-import { API_CSP, b64u, backChannel, CLI, enabled, randomToken, SECURITY_HEADERS, sha256, signInTo, Stack, totp, type Browser, type TestUser } from "./harness";
+import { API_CSP, b64u, backChannel, CLI, enabled, nest, randomToken, SECURITY_HEADERS, sha256, signInTo, Stack, totp, type Browser, type TestUser } from "./harness";
 
 // Signing in at auth's own pages (docs/DESIGN.md §7.1, §9.1, §9.2, §9.4): the
 // page shell and its headers, the static assets, the forms' CSRF defences,
@@ -1695,6 +1695,14 @@ describe.skipIf(!enabled)("signing in", () => {
       const b = stack.browser();
       await begin(b);
       await expectRefused(b, await finish(b, "{}", { type: "application/json; charset=utf-8" }));
+    });
+
+    test("a body nested as deep as 64 KiB holds is read like any other, and the server keeps answering", async () => {
+      const b = stack.browser();
+      await begin(b);
+      await expectRefused(b, await finish(b, nest('{"response":<nest>}')));
+      await expectJsonError(await finish(b, nest("<nest>")), 400, "invalid_request", "The body must be a JSON object.");
+      expect((await fetch(`${stack.url}/healthz`)).status).toBe(200);
     });
 
     test.each([

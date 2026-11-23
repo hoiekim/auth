@@ -2,7 +2,8 @@
 //! request body, the services file, a token's parts, WebAuthn's client data,
 //! an import line. Stricter readers would refuse what the Bun server takes:
 //!
-//! - nesting has no depth limit (a body is at most 64 KiB anyway);
+//! - nesting has no depth limit, so what holds a value must not recurse
+//!   through it on a small stack (`Held`, and `STACK_BYTES` in main.rs);
 //! - a number is a double: `1e400` is Infinity, held as the largest finite
 //!   double of its sign, which compares as Infinity does with any time or
 //!   count; a whole number is kept as an integer, as JavaScript prints it;
@@ -88,6 +89,38 @@ pub fn parse(text: &str) -> Option<Value> {
                 }
             }
         }
+    }
+}
+
+/// Takes a value apart without recursion. serde_json's own drop, like its
+/// clone, `==` and `Debug`, takes a stack frame for each level of nesting.
+pub fn discard(value: Value) {
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        match value {
+            Value::Array(items) => pending.extend(items),
+            Value::Object(map) => pending.extend(map.into_iter().map(|(_, v)| v)),
+            _ => {}
+        }
+    }
+}
+
+/// A value parsed from an input larger than a request body, an import line
+/// or the services file, which can nest millions of levels deep: however it
+/// goes, it is taken apart without recursion. Read it through references; a
+/// clone, `==` or `Debug` of a deep part would still recurse.
+pub struct Held<T: Into<Value> + Default>(pub T);
+
+impl<T: Into<Value> + Default> Drop for Held<T> {
+    fn drop(&mut self) {
+        discard(std::mem::take(&mut self.0).into());
+    }
+}
+
+impl<T: Into<Value> + Default> std::ops::Deref for Held<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
     }
 }
 
@@ -255,7 +288,9 @@ mod tests {
     #[test]
     fn reads_what_json_parse_reads() {
         assert_eq!(parse(" {\"a\":[1,2.5,-0,true,false,null,\"x\"]}\n"), Some(json!({ "a": [1, 2.5, 0, true, false, null, "x"] })));
-        assert_eq!(parse(&format!("{}{}", "[".repeat(30_000), "]".repeat(30_000))).map(|v| v.is_array()), Some(true));
+        // Held: serde_json's own drop of 30,000 levels is about all a test
+        // thread's 2 MiB stack holds.
+        assert!(parse(&format!("{}{}", "[".repeat(30_000), "]".repeat(30_000))).map(Held).is_some_and(|v| v.is_array()));
         assert_eq!(parse("1e400").and_then(|v| v.as_f64()), Some(f64::MAX));
         assert_eq!(parse("-1e400").and_then(|v| v.as_f64()), Some(-f64::MAX));
         assert_eq!(parse("1e-400"), Some(json!(0)));
@@ -269,6 +304,18 @@ mod tests {
         assert_eq!(order.as_object().expect("a map").keys().collect::<Vec<_>>(), ["1", "2", "4294967294", "b", "a", "01", "4294967295"]);
         assert_eq!(order["b"], json!(8));
         assert_eq!(parse(r#"{"__proto__":1}"#), Some(json!({ "__proto__": 1 })));
+    }
+
+    #[test]
+    fn takes_apart_any_depth_without_recursion() {
+        // Far deeper than a test thread's stack holds through serde_json's
+        // own drop.
+        let depth = 1_000_000;
+        let text = format!("{{\"a\":{}{}, \"b\":[{{\"c\":{}{}}}]}}", "[".repeat(depth), "]".repeat(depth), "[".repeat(depth), "]".repeat(depth));
+        let held = Held(parse(&text).expect("parses"));
+        assert!(held["a"].is_array() && held["b"][0]["c"].is_array());
+        drop(held);
+        discard(parse(&text).expect("parses"));
     }
 
     #[test]
