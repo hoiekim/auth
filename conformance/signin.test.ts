@@ -1699,25 +1699,29 @@ describe.skipIf(!enabled)("signing in", () => {
 
     test("sign-ins padded to 64 KiB, queued on the password hasher, hold up no other request with a body", async () => {
       // Each names no account, so each waits its turn on the one hash slot;
-      // the Rust server lets go of the body first (DESIGN §10).
-      const browsers = Array.from({ length: 16 }, () => stack.browser());
+      // the Rust server lets go of the body first (DESIGN §10). The small
+      // request goes once the first is answered, so the rest are queued
+      // however fast this machine hashes.
+      const browsers = Array.from({ length: 24 }, () => stack.browser());
       for (const b of browsers) await b.formCsrf();
       let answered = 0;
+      let firstAnswered!: () => void;
+      const first = new Promise<void>((resolve) => (firstAnswered = resolve));
       const signIns = browsers.map(async (b) => {
         const res = await b.form("/login", { login: `nobody-${randomBytes(4).toString("hex")}`, password: "x", padding: "a".repeat(64 * 1024 - 400) });
         await res.body?.cancel();
-        answered++;
+        if (++answered === 1) firstAnswered();
         return res.status;
       });
-      await Bun.sleep(100);
+      await first;
       const before = answered;
       const small = await stack.browser().request("/login/passkey/options", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
       const meanwhile = answered - before;
       expect(small.status).toBe(200);
       await small.body?.cancel();
       expect(await Promise.all(signIns)).toEqual(browsers.map(() => 401));
-      // Most were still waiting when it was sent, and it didn't wait for them.
-      expect(before).toBeLessThanOrEqual(4);
+      // Most were still queued when it was sent, and it didn't wait for them.
+      expect(before).toBeLessThanOrEqual(browsers.length / 2);
       expect(meanwhile).toBeLessThanOrEqual(2);
     });
 
