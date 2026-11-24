@@ -239,7 +239,7 @@ The fields of a service:
 | `clients` | yes | One or more, each with an `id` unique across every service (`[a-z0-9][a-z0-9._-]{0,63}`), a `type` (`confidential` or `public`), `redirect_uris` and optional `post_logout_redirect_uris`. Both lists hold absolute URIs without a fragment or credentials: `https`, `http` only for a loopback host (`localhost`, `127.0.0.1` or `[::1]`, RFC 8252 §7.3), or, for a public client, a private-use scheme that is a reverse domain name with a dot, such as `com.example.tasks:` (RFC 8252 §7.1). A registered client's `id` and `type` never change (§6.2). |
 | `events_url` | no | Where §7.4's events go: an `http` or `https` URL, on any host, without credentials or a fragment. A service without one relies on the pull (§7.1), and on reading its pending invites (§12.6). |
 
-The file is checked at start, like every other setting: a file that breaks any rule above stops the start, and every problem is listed at once. An unknown field is a problem too. A problem names a bad entry as JSON, or, when it nests more than 64 levels deep, says so. A registration is checked against the same rules and refused with every problem listed. Where the file would leave a field out, it may also write `[]` for a list, or `null` for `default_role` and `events_url`, as `GET /v1/services` answers. The `source`, `secrets` and `held` fields that `GET`, `POST` and `PUT` add to their answers are not part of a definition: a body that carries them is refused for its unknown fields. It is capped so that every copy can hold every service: at most 100 registered services, each with at most 32 roles, 32 scopes of each kind and 5 clients, each client with at most 10 redirect URIs and 10 sign-out URIs, and each URI at most 1024 characters.
+The file is checked at start, like every other setting: a file that breaks any rule above stops the start, and every problem is listed at once. An unknown field is a problem too. A registration is checked against the same rules and refused with every problem listed. Where the file would leave a field out, it may also write `[]` for a list, or `null` for `default_role` and `events_url`, as `GET /v1/services` answers. The `source`, `secrets` and `held` fields that `GET`, `POST` and `PUT` add to their answers are not part of a definition: a body that carries them is refused for its unknown fields. It is capped so that every copy can hold every service: at most 100 registered services, each with at most 32 roles, 32 scopes of each kind and 5 clients, each client with at most 10 redirect URIs and 10 sign-out URIs, and each URI at most 1024 characters.
 
 Rules, in full:
 1. **Default deny.** No access row means no sign-in to the service: auth answers 403 with a page that says "you don't have access to wiki", and issues no code (a `prompt=none` request gets `access_denied`). The one exception is a service with `signup: "open"`, which gives a signed-in user without a row its `default_role`, and writes that row.
@@ -823,7 +823,7 @@ Counters live in the `throttle` table, so every copy shares them and a restart d
 | A recovery code outside a sign-in (the U6 reset) | the per-account and per-IP sign-in limits above |
 | Emails from sign-up, the reset page, a change of one's own email, and invitations | 3 per hour per address, and 10 per hour per sender: the IP on auth's pages, the signed-in user or the app's client on the API; the answer is the same whether or not the address exists. The activation and reset links an `auth:admin` sends aren't counted. |
 | Account creation (sign-up on an open service, a new account from an invitation, or, once platform sign-in is built, a first platform sign-in, §12.3) | 10 per hour per IP |
-| A request, on any connection | A head of at most 16 KiB and 198 headers (`431` past either), a body of at most 64 KiB (`413`), and about 10 seconds to send a request, or between requests on a kept connection, after which the connection is closed unanswered. HTTP/1.0 gets one answer per connection. |
+| A request, on any connection | A head of at most 16 KiB and 198 headers (`431` past either), a body of at most 64 KiB (`413`), JSON nested at most 64 levels deep in a body, a file, an import line or a token (deeper is read as JSON that doesn't parse: a body's answer is `400`), and about 10 seconds to send a request, or between requests on a kept connection, after which the connection is closed unanswered. HTTP/1.0 gets one answer per connection. |
 | `/oauth/token` per client | 60 per minute |
 | `/oauth/introspect` per client | 600 per minute. Failures are counted per client (1000 an hour) and per end-user address the client names (10 per 15 minutes; the exception above), so a protocol server's brute-force limits stay effective. Past either, the answer is `429`. A back channel through the proxy arrives with the proxy's `X-Real-IP`, the client's own address; that one keys no per-address counter, which would put all the client's users in one bucket. |
 
@@ -1063,9 +1063,11 @@ how JSON and CBOR text are read (`JSON.parse`, `TextDecoder`).
 The Rust server reproduces those too. `rust/tests/database_urls.json`
 records Bun's reading of each case, CI checks that the Bun it runs still
 reads them so, and the Rust server's tests check its own reading against
-them. `JSON.parse` has no depth limit, so neither server may recurse through
-a parsed value on a stack that can't hold it: the deepest 64 KiB body nests
-32,000 levels, and a services file or an import line millions. A change to
+them. One exception is deliberate: JSON nested more than 64 levels deep is
+read by neither, in a body, a file, an import line or a token (§9.4), though
+`JSON.parse` takes any depth. A 64 KiB body nested 32,000 levels deep held
+2 MiB in the Bun server and 9 MiB in the Rust one while it was answered, and
+a burst of them took either past the 64 MB limit (§10). A change to
 behaviour is made in both, with a test both pass.
 
 **Dependencies.** The Rust server has no runtime's built-ins to lean on, so

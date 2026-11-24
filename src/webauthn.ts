@@ -1,6 +1,7 @@
 import { createPublicKey, verify, type JsonWebKeyInput, type KeyObject } from "node:crypto";
 import { decodeCbor, decodeCborPrefix, type Cbor } from "./cbor";
 import { base64url, fromBase64url, random, sha256 } from "./crypto";
+import { parseJson } from "./json";
 
 // WebAuthn's relying-party checks (docs/DESIGN.md §9.1; W3C Web Authentication
 // Level 3, §7.1 and §7.2), for the one way auth uses it: discoverable
@@ -162,7 +163,7 @@ export function verifyAssertion(
 }
 
 function clientDataMatches(encoded: string, type: string, rp: RelyingParty, challenge: string): boolean {
-  const c: unknown = JSON.parse(fromBase64url(encoded).toString("utf8"));
+  const c: unknown = parseJson(fromBase64url(encoded).toString("utf8"));
   if (!isObject(c)) return false;
   // Auth's pages can't be framed (§9.2), so a cross-origin ceremony is never ours.
   return c.type === type && c.challenge === challenge && c.origin === rp.origin && c.crossOrigin !== true;

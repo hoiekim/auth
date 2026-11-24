@@ -13,7 +13,6 @@ use crate::app::App;
 use crate::audit::{audit, Audit};
 use crate::crypto::{is_id, new_id};
 use crate::error::Result;
-use crate::json::{discard, Held};
 use crate::mail::is_email_address;
 use crate::registry::lock_service;
 use crate::services::Service;
@@ -28,9 +27,8 @@ const ACTOR: &str = "host-cli";
 // container (§10). Larger imports are split into several files.
 pub const MAX_LINES: usize = 10_000;
 
-// Blank lines are skipped; a line that isn't a JSON object is a problem. A
-// line can nest as deep as the input is long, so each is held in `Held`.
-fn parse_lines(text: &str, problems: &mut Vec<String>) -> Vec<(usize, Held<Map<String, Value>>)> {
+// Blank lines are skipped; a line that isn't a JSON object is a problem.
+fn parse_lines(text: &str, problems: &mut Vec<String>) -> Vec<(usize, Map<String, Value>)> {
     let raws: Vec<&str> = text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l)).collect();
     if raws.iter().filter(|r| !js_trim(r).is_empty()).count() > MAX_LINES {
         problems.push(format!("the input has more than {MAX_LINES} lines; split it"));
@@ -43,11 +41,8 @@ fn parse_lines(text: &str, problems: &mut Vec<String>) -> Vec<(usize, Held<Map<S
         }
         match crate::json::parse(raw) {
             None => problems.push(format!("line {}: not valid JSON", i + 1)),
-            Some(Value::Object(value)) => out.push((i + 1, Held(value))),
-            Some(other) => {
-                discard(other);
-                problems.push(format!("line {}: not a JSON object", i + 1));
-            }
+            Some(Value::Object(value)) => out.push((i + 1, value)),
+            Some(_) => problems.push(format!("line {}: not a JSON object", i + 1)),
         }
     }
     if out.is_empty() && problems.is_empty() {

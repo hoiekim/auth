@@ -16,6 +16,7 @@ import { findUser, findUserByLogin, insertUser, isUniqueViolation, USERNAME, typ
 import { checkForm, extrasWith, flash, formToken, h, hiddenCsrf, localPath, messagePage, page } from "./layout";
 import { accountKey, completeSignIn } from "./signin";
 import { cut } from "../text";
+import { parseJson } from "../json";
 
 // The pages around an account's life: sign-up, invitations, activation,
 // password reset and email verification (docs/DESIGN.md U5–U7, A1).
@@ -446,7 +447,7 @@ export async function postResetConfirm({ req, ip, deps: app }: Ctx<App>): Promis
     } else {
       let response: unknown = null;
       try {
-        response = JSON.parse(form.get("passkey") ?? "null");
+        response = parseJson(form.get("passkey") ?? "null");
       } catch {
         response = null;
       }

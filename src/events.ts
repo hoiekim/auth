@@ -2,6 +2,7 @@ import type { SQL } from "bun";
 import type { App } from "./app";
 import { fromBase64url, newId } from "./crypto";
 import { signJwt } from "./jwt";
+import { parseJson } from "./json";
 
 // Events to apps (docs/DESIGN.md §7.4): Security Event Tokens signed when the
 // change commits, written to the outbox in the same transaction, and POSTed
@@ -112,7 +113,7 @@ async function deliverOne(app: App, fetchFn: typeof fetch, row: { id: string; se
 
 function issuedAt(token: string): number {
   try {
-    const payload = JSON.parse(fromBase64url(token.split(".")[1] ?? "").toString("utf8"));
+    const payload: any = parseJson(fromBase64url(token.split(".")[1] ?? "").toString("utf8"));
     return typeof payload.iat === "number" ? payload.iat : 0;
   } catch {
     return 0;

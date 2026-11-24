@@ -1697,11 +1697,17 @@ describe.skipIf(!enabled)("signing in", () => {
       await expectRefused(b, await finish(b, "{}", { type: "application/json; charset=utf-8" }));
     });
 
-    test("a body nested as deep as 64 KiB holds is read like any other, and the server keeps answering", async () => {
+    test("a body nested 64 levels deep is read; deeper, as deep as 64 KiB holds included, is not JSON", async () => {
       const b = stack.browser();
       await begin(b);
-      await expectRefused(b, await finish(b, nest('{"response":<nest>}')));
-      await expectJsonError(await finish(b, nest("<nest>")), 400, "invalid_request", "The body must be a JSON object.");
+      // The body is a level, and each array another.
+      const levels = (n: number) => `{"response":${"[".repeat(n - 1)}${"]".repeat(n - 1)}}`;
+      await expectRefused(b, await finish(b, levels(64)));
+      for (const body of [levels(65), nest('{"response":<nest>}'), nest("<nest>")]) {
+        await expectJsonError(await finish(b, body), 400, "invalid_request", "The body is not valid JSON.");
+      }
+      // Refused before the per-IP count.
+      expect(await throttleHits(`ip:${b.ip}:login`)).toBe(1);
       expect((await fetch(`${stack.url}/healthz`)).status).toBe(200);
     });
 
