@@ -1,8 +1,9 @@
 name: CD
 
-# Publishes the image to Docker Hub after CI passes on a push to main, then
-# asks the deployment hook in the DEPLOY_URL secret, when there is one, to
-# deploy it (docs/DEPLOYMENT.md §2).
+# Publishes both images to Docker Hub after CI passes on a push to main, the
+# Bun server's and the Rust server's (docs/DESIGN.md §16), then asks the
+# deployment hook in the DEPLOY_URL secret, when there is one, to deploy the
+# one the DEPLOY_IMPLEMENTATION variable names (docs/DEPLOYMENT.md §2).
 on:
   workflow_run:
     workflows: [CI]
@@ -20,13 +21,14 @@ permissions:
   actions: read
 
 jobs:
-  docker-push:
+  # Both images are built from the one commit this job names.
+  tip:
     if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     outputs:
       sha: ${{ steps.tip.outputs.sha }}
-      digest: ${{ steps.push.outputs.digest }}
+      short: ${{ steps.tip.outputs.short }}
     steps:
       # CI runs for successive pushes can finish out of order, and the run
       # that triggered this one may be for a commit main has moved past, so
@@ -46,23 +48,28 @@ jobs:
             echo "CI has not passed for main's tip $sha yet; its own CI run will publish it."
           fi
 
-      - if: steps.tip.outputs.sha != ''
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+  # The Bun server's image: <namespace>/auth:latest and sha-<short sha>.
+  docker-push:
+    needs: tip
+    if: needs.tip.outputs.sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ steps.tip.outputs.sha }}
+          ref: ${{ needs.tip.outputs.sha }}
           persist-credentials: false
 
-      - if: steps.tip.outputs.sha != ''
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - if: steps.tip.outputs.sha != ''
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
 
-      - if: steps.tip.outputs.sha != ''
-        id: push
+      - id: push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -70,26 +77,70 @@ jobs:
           push: true
           tags: |
             ${{ secrets.DOCKER_HUB_USERNAME }}/auth:latest
-            ${{ secrets.DOCKER_HUB_USERNAME }}/auth:sha-${{ steps.tip.outputs.short }}
+            ${{ secrets.DOCKER_HUB_USERNAME }}/auth:sha-${{ needs.tip.outputs.short }}
 
       # The digest is what a deployment that pins the image pins.
-      - if: steps.tip.outputs.sha != ''
-        name: Record the digest
+      - name: Record the digest
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
-          SHORT: ${{ steps.tip.outputs.short }}
+          SHORT: ${{ needs.tip.outputs.short }}
         run: |
           echo "sha-$SHORT is $DIGEST"
           {
-            echo "### Published sha-$SHORT"
+            echo "### Published sha-$SHORT (the Bun server)"
             echo
             echo "Digest: \`$DIGEST\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Runs only once this run has published main's tip.
+  # The Rust server's image, in the same repository: <namespace>/auth:rust
+  # and rust-sha-<short sha>.
+  rust-docker-push:
+    needs: tip
+    if: needs.tip.outputs.sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.tip.outputs.sha }}
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      - id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./rust/Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_HUB_USERNAME }}/auth:rust
+            ${{ secrets.DOCKER_HUB_USERNAME }}/auth:rust-sha-${{ needs.tip.outputs.short }}
+
+      - name: Record the digest
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          SHORT: ${{ needs.tip.outputs.short }}
+        run: |
+          echo "rust-sha-$SHORT is $DIGEST"
+          {
+            echo "### Published rust-sha-$SHORT (the Rust server)"
+            echo
+            echo "Digest: \`$DIGEST\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Runs only once this run has published both images of main's tip, so a
+  # deployment can move to either, or back, at any release.
   deploy:
-    needs: docker-push
-    if: needs.docker-push.outputs.sha != ''
+    needs: [tip, docker-push, rust-docker-push]
+    if: needs.tip.outputs.sha != ''
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -102,13 +153,23 @@ jobs:
         env:
           DEPLOY_URL: ${{ secrets.DEPLOY_URL }}
           DEPLOY_SECRET: ${{ secrets.DEPLOY_SECRET }}
-          SHA: ${{ needs.docker-push.outputs.sha }}
-          DIGEST: ${{ needs.docker-push.outputs.digest }}
+          SHA: ${{ needs.tip.outputs.sha }}
+          IMPLEMENTATION: ${{ vars.DEPLOY_IMPLEMENTATION }}
+          BUN_DIGEST: ${{ needs.docker-push.outputs.digest }}
+          RUST_DIGEST: ${{ needs.rust-docker-push.outputs.digest }}
         run: |
           if [ -z "$DEPLOY_URL" ]; then
             echo "No DEPLOY_URL secret: published only."
             exit 0
           fi
+          # Which server the deployment runs: the Bun one unless the
+          # repository variable says otherwise.
+          case "${IMPLEMENTATION:-bun}" in
+            bun) IMPLEMENTATION=bun; DIGEST=$BUN_DIGEST ;;
+            rust) DIGEST=$RUST_DIGEST ;;
+            *) echo "::error::DEPLOY_IMPLEMENTATION is \"bun\" or \"rust\""; exit 1 ;;
+          esac
+          echo "deploying the $IMPLEMENTATION server's image"
           # The hook deploys this digest, so it must name what this run pushed.
           if ! [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "::error::the push gave no image digest to deploy"
@@ -120,7 +181,7 @@ jobs:
             out=$(curl -s -o /dev/null --max-time 660 -w '%{http_code} %{time_total}' -X POST "$DEPLOY_URL" \
               -H "Authorization: Bearer $DEPLOY_SECRET" \
               -H "Content-Type: application/json" \
-              --data "{\"sha\":\"${SHA}\",\"digest\":\"${DIGEST}\",\"repo\":\"${GITHUB_REPOSITORY}\"}") || rc=$?
+              --data "{\"sha\":\"${SHA}\",\"digest\":\"${DIGEST}\",\"repo\":\"${GITHUB_REPOSITORY}\",\"implementation\":\"${IMPLEMENTATION}\"}") || rc=$?
             status=${out%% *}
             case $rc in
               0) ;;

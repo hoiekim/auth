@@ -37,8 +37,8 @@ on `debian:bookworm-slim`, holds that binary alone, owned by root and run as
 `nobody`. `auth` is the server, `auth cli <command>` the break-glass CLI, and
 `auth healthcheck` what its `HEALTHCHECK` runs. Everything else in this
 document holds for both images: the environment, health, stopping, the
-database and the network. CD publishes the Bun image only; a deployment that
-wants the Rust one builds it.
+database and the network. CD publishes both images of every release, as
+tags of one Docker Hub repository (§2).
 
 **Health.** `HEALTHCHECK` runs `GET /healthz` every 30 seconds. It answers
 200 when the database answers within two seconds, and 503 otherwise. At
@@ -57,21 +57,30 @@ it. The `rust-image` job does the same for the Rust server's image.
 ## 2. Releases
 
 1. A PR merges to `main`.
-2. CI runs on the push. Once it passes, CD builds `main`'s tip, pushes it to
-   Docker Hub as `<namespace>/auth:latest` and `<namespace>/auth:sha-<short sha>`
-   (the namespace is the account the CD secrets below name), and records the
-   image digest in the run's summary.
+2. CI runs on the push. Once it passes, CD builds both images of `main`'s
+   tip and pushes them to one Docker Hub repository, `<namespace>/auth` (the
+   namespace is the account the CD secrets below name): the Bun server's as
+   `latest` and `sha-<short sha>`, the Rust server's as `rust` and
+   `rust-sha-<short sha>`. It records each image's digest in the run's
+   summary.
 3. When the repository has a `DEPLOY_URL` secret, CD then POSTs
-   `{"sha", "digest", "repo"}` to it, `digest` being the image it just
-   pushed, with `Authorization: Bearer <DEPLOY_SECRET>`, and waits for the
-   answer. A refused or cut connection, 409, 502 and 504 are retried a
+   `{"sha", "digest", "repo", "implementation"}` to it, with
+   `Authorization: Bearer <DEPLOY_SECRET>`, and waits for the answer.
+   `implementation` is the server the repository's `DEPLOY_IMPLEMENTATION`
+   variable names, `bun` (the default, when it isn't set) or `rust`, and
+   `digest` is that server's image, which this run just pushed. Any other
+   value of the variable fails the run before the hook is called. A refused or cut connection, 409, 502 and 504 are retried a
    minute apart, up to 10 tries; any other answer than 2xx fails the run.
    Only the status is printed, never the URL or the response. Without
    `DEPLOY_URL`, CD stops after publishing.
 
 **The deploy hook.** What CD expects of the endpoint behind `DEPLOY_URL`:
 
-- It deploys `<namespace>/auth@<digest>`, the image this run built. A hook
+- It deploys `<namespace>/auth@<digest>`, the image this run built, of
+  either server: both are in that one repository. `implementation` is there
+  for what a hook sets per server, such as its memory limit
+  (`docs/DESIGN.md` §16); the image itself holds its command and health
+  check. A hook
   that pulls `latest` instead runs whatever the tag holds when it pulls, so
   anyone who can push to the namespace can put an image there; for that
   deployment, the Docker Hub credential is as sensitive as the right to
@@ -95,6 +104,16 @@ A deployment chooses how releases reach it (`docs/DESIGN.md` §11):
   upgrades by moving the pin in its own configuration, where it reviews the
   change. A push to this repository can't reach it on its own.
 
+**Moving between the servers.** Each release publishes both images from one
+commit, so moving from one server to the other changes the code that runs and
+nothing else, and either way the database stays as it is (`docs/DESIGN.md`
+§16). Check the deployment against §16's list of what differs first: some
+`DATABASE_URL` parameters, the TLS certificates Postgres presents, a `.env`
+file, and the CLI's name in runbooks. Following releases, set
+`DEPLOY_IMPLEMENTATION` to `rust`; the next release CD deploys is the Rust
+server's image, and setting it back to `bun` moves the next one back. Pinned,
+move the pin to the other image's digest from the same release.
+
 **Rolling back.** Following releases, revert the change here, which
 releases and deploys the code before it, or pin the previous digest until a
 fix lands. Pinned, move the pin back. Migrations are expand-only, so the
@@ -106,7 +125,8 @@ in the file, or their apps stop signing people in.
 CD's repository secrets: `DOCKER_HUB_USERNAME`, and `DOCKER_HUB_ACCESS_TOKEN`,
 a Docker Hub access token that can push to the `auth` repository; and, to
 deploy, `DEPLOY_URL` and `DEPLOY_SECRET`, the deployment's hook and its
-bearer token.
+bearer token. Its repository variable, `DEPLOY_IMPLEMENTATION`, is not
+secret.
 
 ## 3. What the runtime needs
 
@@ -336,4 +356,4 @@ service keeps nothing in memory that another copy needs (`docs/DESIGN.md`
   review required (`.github/CODEOWNERS`), the `check` and `image` CI jobs
   required, no force pushes.
 - **Private vulnerability reporting on** (`SECURITY.md`).
-- **The CD secrets** from §2.
+- **The CD secrets and the `DEPLOY_IMPLEMENTATION` variable** from §2.

@@ -893,7 +893,7 @@ Every change the CLI makes to users, access, client secrets, encryption or impor
 
 `docs/DEPLOYMENT.md` is the guide. What the design asks of every deployment:
 
-- **Image.** CD publishes it from `main` once CI passes and, when the repository names a deploy hook (`DEPLOY_URL`), posts the pushed image's digest to that hook to deploy. A deployment either follows releases through such a hook, so that a merge here is a release to it, or runs the image **pinned by digest** and moves the pin through a change it reviews, so that a push to this repo can't reach it on its own. Either way it runs an image by digest, never by a tag someone could push over.
+- **Image.** CD publishes both servers' images (§16) from `main` once CI passes and, when the repository names a deploy hook (`DEPLOY_URL`), posts to that hook the digest of the one the repository's `DEPLOY_IMPLEMENTATION` variable names, to deploy. A deployment either follows releases through such a hook, so that a merge here is a release to it, or runs the image **pinned by digest** and moves the pin through a change it reviews, so that a push to this repo can't reach it on its own. Either way it runs an image by digest, never by a tag someone could push over.
 - **Runtime.**
   - One container behind a TLS-terminating proxy that sets `X-Real-IP` from the connecting address. No ports published on the host.
   - 64 MB and half a CPU (§10).
@@ -1090,8 +1090,9 @@ with `--locked`. A deployment that runs the Rust image trusts that list where
 **What a deployment sees differ.**
 - The CLI's name, in its commands and in the messages that name it.
 - The image: `rust/Dockerfile` builds one binary onto `debian:bookworm-slim`,
-  run as `nobody`, its `HEALTHCHECK` `auth healthcheck`. CD publishes the
-  Bun image only (`docs/DEPLOYMENT.md`).
+  run as `nobody`, its `HEALTHCHECK` `auth healthcheck`. CD publishes both
+  images of each release as tags of one repository, `rust` and
+  `rust-sha-<short sha>` for this one (`docs/DEPLOYMENT.md` §2).
 - Memory. Measured alike, with no limit, around five rounds of 40
   concurrent password sign-ins: the Rust server's RSS was 9 MiB at rest and
   31 MiB after, 22 MiB of it anonymous, mostly the one 19 MiB argon2id
