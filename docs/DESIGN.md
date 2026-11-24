@@ -885,6 +885,7 @@ Every change the CLI makes to users, access, client secrets, encryption or impor
 
 **Resources**
 - **Memory and CPU:** designed for a 64 MB limit and half a CPU. Measured under Bun 1.4.4 at that limit, the memory the kernel can't reclaim is 9–13 MiB at rest and peaked at 33 MiB during bursts of 40 concurrent sign-ins, under an 85% alarm line of 54 MB; one argon2id hash is 19 MiB of that (§9.1). RSS reads higher, 40–60 MB, because it counts the Bun binary's file-backed pages, which the kernel can drop. A deployment that expects bursts of sign-ins should measure its peak and raise the limit if needed.
+- **Request bodies:** at most 64 KiB each, nested at most 64 levels (§9.4). A body costs more than its size while it is answered: in the Rust server a parsed JSON value is 72 bytes, so a 64 KiB body of small values takes up to 4.5 MiB while it is parsed and about 2 MiB after, and 16 at once would fill 64 MB. So the Rust server answers bodies within a budget of 256 KiB at a time, counted by size: a body that would pass it waits, in order of arrival, until an earlier one has been answered. The answers are the same, only later. The Bun server's values are smaller: it answered 16 such bodies at once, beside a burst of sign-ins, in 53 MiB.
 - **Database load** is dominated by refreshes, one per active session per 10 minutes. At 50 active sessions that is about 0.1 queries per second. The pool is 5 connections.
 - **Services** are kept in each copy and checked against their revision once per request (§6.2): one single-row read, skipped by health checks and static files. A change reloads them in one query.
 - **The apps** gain a small client and a JWKS of a few hundred bytes. They lose their password hashing, so peak memory falls.
@@ -1099,7 +1100,9 @@ with `--locked`. A deployment that runs the Rust image trusts that list where
   concurrent password sign-ins: the Rust server's RSS was 9 MiB at rest and
   31 MiB after, 22 MiB of it anonymous, mostly the one 19 MiB argon2id
   work area it keeps for the next hash; the Bun server's was 40 MiB at rest
-  and 92 MiB after (58 MiB anonymous), 53 MiB a few seconds later.
+  and 92 MiB after (58 MiB anonymous), 53 MiB a few seconds later. Under a
+  burst of large request bodies the Rust server answers them in turn,
+  within its body budget (§10), where the Bun server takes them all at once.
 - A `.env` file: Bun reads one in its working directory; the Rust server
   reads its environment alone.
 - In `DATABASE_URL`: `prepare=false`, which turns off the Bun client's

@@ -17,6 +17,7 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::server::graceful::GracefulShutdown;
 use serde_json::json;
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use url::Url;
 
 use crate::app::App;
@@ -339,8 +340,28 @@ async fn answer(app: App, router: Arc<Router>, peer: SocketAddr, req: hyper::Req
     if !app.ready.load(Ordering::SeqCst) && url.path() != "/healthz" {
         return Ok(to_hyper(error_response(503, "temporarily_unavailable", "Starting up.", &[("Retry-After".to_string(), "5".to_string())])));
     }
+    // The body's share of the budget, held until it has been answered.
+    let _share = match body_share(bytes.len()) {
+        0 => None,
+        n => Some(BODY_BUDGET.acquire_many(n).await.expect("the body budget is never closed")),
+    };
     let request = Request { method, url, headers, body: bytes };
     Ok(to_hyper(handle(&app, &router, request, ip).await))
+}
+
+/// What the bodies being answered at once may come to, in KiB (§10). A
+/// parsed JSON value is 72 bytes, so a 64 KiB body of small values takes
+/// up to 4.5 MiB while it is parsed and 2.2 MiB while it is answered: 16
+/// at once would fill the 64 MB a deployment is designed for. 256 KiB keeps
+/// them under 18 MiB. A body waits for its share in order of arrival, so a
+/// burst of large ones slows the bodies behind it rather than ending the
+/// process; the answers are the same.
+const BODY_BUDGET_KIB: usize = 256;
+static BODY_BUDGET: Semaphore = Semaphore::const_new(BODY_BUDGET_KIB);
+
+/// A body's share of the budget: its size in KiB, rounded up.
+fn body_share(len: usize) -> u32 {
+    u32::try_from(len.div_ceil(1024)).unwrap_or(u32::MAX)
 }
 
 /// Serves until `stop` settles, then finishes the requests in flight.
@@ -367,4 +388,19 @@ pub async fn serve(app: App, router: Arc<Router>, listener: TcpListener, stop: i
     }
     drop(listener);
     graceful.shutdown().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_body_takes_its_size_in_kib_and_four_of_the_largest_fill_the_budget() {
+        assert_eq!(body_share(0), 0);
+        assert_eq!(body_share(1), 1);
+        assert_eq!(body_share(1024), 1);
+        assert_eq!(body_share(1025), 2);
+        assert_eq!(body_share(MAX_BODY_BYTES), 64);
+        assert_eq!(BODY_BUDGET_KIB / body_share(MAX_BODY_BYTES) as usize, 4);
+    }
 }

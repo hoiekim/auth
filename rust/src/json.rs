@@ -96,8 +96,13 @@ pub fn parse(text: &str) -> Option<Value> {
                     if !p.eat(b'}') {
                         return None;
                     }
+                    // Without its spare room, as an array: an object of one
+                    // member grows room for three at its first.
                     let Some(Open::Object(map, _)) = stack.pop() else { return None };
-                    value = Value::Object(indices_first(map));
+                    let map = indices_first(map);
+                    let mut exact = Map::with_capacity(map.len());
+                    exact.extend(map);
+                    value = Value::Object(exact);
                 }
             }
         }

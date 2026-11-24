@@ -1697,6 +1697,22 @@ describe.skipIf(!enabled)("signing in", () => {
       await expectRefused(b, await finish(b, "{}", { type: "application/json; charset=utf-8" }));
     });
 
+    test("a burst of the largest bodies is answered, each as it would be alone", async () => {
+      // 64 KiB each, of small objects: the shape that costs a parser the
+      // most, which the Rust server takes in turn (DESIGN §10).
+      const body = `{"response":[${Array.from({ length: Math.floor((64 * 1024 - 16) / 8) }, () => '{"a":0}').join(",")}]}`;
+      expect(body.length).toBeGreaterThan(63 * 1024);
+      expect(body.length).toBeLessThanOrEqual(64 * 1024);
+      const answers = await Promise.all(
+        Array.from({ length: 24 }, async () => {
+          const res = await finish(stack.browser(), body);
+          return `${res.status} ${((await res.json()) as { error_description?: string }).error_description}`;
+        }),
+      );
+      expect(new Set(answers)).toEqual(new Set([`401 ${DIDNT_WORK}`]));
+      expect((await fetch(`${stack.url}/healthz`)).status).toBe(200);
+    });
+
     test("a body nested 64 levels deep is read; deeper, as deep as 64 KiB holds included, is not JSON", async () => {
       const b = stack.browser();
       await begin(b);
