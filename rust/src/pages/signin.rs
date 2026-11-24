@@ -109,8 +109,12 @@ pub async fn get_login(ctx: Ctx) -> Result<Response> {
 
 pub async fn post_login(ctx: Ctx) -> Result<Response> {
     let app = &ctx.app;
-    let form = read_form(&ctx.req)?;
+    let mut form = read_form(&ctx.req)?;
     check_form(app, &ctx.req, &form)?;
+    // Kept: what this handler reads. The body goes before the waits on the
+    // breached-password check and the hasher (the body budget, server.rs).
+    form.keep(&["return_to", "login", "password"]);
+    ctx.req.let_go_of_body();
     let return_to = local_path(form.get("return_to"));
     let login = utf16_prefix(js_trim(form.get("login").unwrap_or("")), 254).to_string();
     let password = form.get("password").unwrap_or("");

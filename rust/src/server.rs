@@ -340,13 +340,19 @@ async fn answer(app: App, router: Arc<Router>, peer: SocketAddr, req: hyper::Req
     if !app.ready.load(Ordering::SeqCst) && url.path() != "/healthz" {
         return Ok(to_hyper(error_response(503, "temporarily_unavailable", "Starting up.", &[("Retry-After".to_string(), "5".to_string())])));
     }
-    // The body's share of the budget, held until it has been answered.
-    let _share = match body_share(bytes.len()) {
-        0 => None,
-        n => Some(BODY_BUDGET.acquire_many(n).await.expect("the body budget is never closed")),
-    };
-    let request = Request { method, url, headers, body: bytes };
+    let request = admit(&BODY_BUDGET, method, url, headers, bytes).await;
     Ok(to_hyper(handle(&app, &router, request, ip).await))
+}
+
+/// A request with its body's share of `budget`, which it waits for in order
+/// of arrival and holds until it is answered, or until its handler lets go of
+/// the body (`Request::let_go_of_body`).
+async fn admit(budget: &'static Semaphore, method: String, url: Url, headers: Vec<(String, String)>, body: Vec<u8>) -> Request {
+    let share = match body_share(body.len()) {
+        0 => None,
+        n => Some(budget.acquire_many(n).await.expect("the body budget is never closed")),
+    };
+    Request::new(method, url, headers, body, share)
 }
 
 /// What the bodies being answered at once may come to, in KiB (§10). A
@@ -355,7 +361,9 @@ async fn answer(app: App, router: Arc<Router>, peer: SocketAddr, req: hyper::Req
 /// at once would fill the 64 MB a deployment is designed for. 256 KiB keeps
 /// them under 18 MiB. A body waits for its share in order of arrival, so a
 /// burst of large ones slows the bodies behind it rather than ending the
-/// process; the answers are the same.
+/// process; the answers are the same. A handler that waits on the hasher
+/// or the breached-password check lets go of its body first, so that wait
+/// holds up no other body.
 const BODY_BUDGET_KIB: usize = 256;
 static BODY_BUDGET: Semaphore = Semaphore::const_new(BODY_BUDGET_KIB);
 
@@ -393,6 +401,32 @@ pub async fn serve(app: App, router: Arc<Router>, listener: TcpListener, stop: i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_fifth_of_the_largest_bodies_waits_until_one_is_answered_or_let_go() {
+        let budget: &'static Semaphore = Box::leak(Box::new(Semaphore::new(BODY_BUDGET_KIB)));
+        let url = Url::parse("http://localhost/").expect("a URL");
+        let request = |body: Vec<u8>| admit(budget, "POST".to_string(), url.clone(), Vec::new(), body);
+        let mut held = Vec::new();
+        for _ in 0..4 {
+            held.push(request(vec![b'a'; MAX_BODY_BYTES]).await);
+        }
+        assert_eq!(budget.available_permits(), 0);
+        let fifth = request(vec![b'a'; MAX_BODY_BYTES]);
+        tokio::pin!(fifth);
+        assert!(tokio::time::timeout(Duration::from_millis(50), &mut fifth).await.is_err(), "the fifth waits");
+        // A handler that lets go of its body frees its share at once.
+        held[0].let_go_of_body();
+        assert_eq!(held[0].text(), "");
+        let fifth = tokio::time::timeout(Duration::from_secs(1), fifth).await.expect("the fifth is admitted");
+        assert_eq!(fifth.text().len(), MAX_BODY_BYTES);
+        // Answered, the rest give theirs back; a request without a body takes none.
+        drop((held, fifth));
+        assert_eq!(budget.available_permits(), BODY_BUDGET_KIB);
+        let empty = request(Vec::new()).await;
+        assert_eq!(budget.available_permits(), BODY_BUDGET_KIB);
+        drop(empty);
+    }
 
     #[test]
     fn a_body_takes_its_size_in_kib_and_four_of_the_largest_fill_the_budget() {

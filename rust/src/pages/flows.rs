@@ -106,8 +106,12 @@ pub async fn post_signup(ctx: Ctx) -> Result<Response> {
     if !app.services.any_open() {
         return Ok(not_available(app));
     }
-    let form = read_form(&ctx.req)?;
+    let mut form = read_form(&ctx.req)?;
     check_form(app, &ctx.req, &form)?;
+    // Kept: what this handler reads. The body goes before the waits on the
+    // breached-password check and the hasher (the body budget, server.rs).
+    form.keep(&["return_to", "username", "name", "email", "password"]);
+    ctx.req.let_go_of_body();
     let return_to = local_path(form.get("return_to"));
     let username = js_trim(form.get("username").unwrap_or("")).to_lowercase();
     let name = js_trim(form.get("name").unwrap_or("")).to_string();
@@ -225,8 +229,12 @@ pub async fn get_invite(ctx: Ctx) -> Result<Response> {
 
 pub async fn post_invite(ctx: Ctx) -> Result<Response> {
     let app = &ctx.app;
-    let form = read_form(&ctx.req)?;
+    let mut form = read_form(&ctx.req)?;
     check_form(app, &ctx.req, &form)?;
+    // Kept: what this handler reads. The body goes before the waits on the
+    // breached-password check and the hasher (the body budget, server.rs).
+    form.keep(&["token", "action", "username", "name", "password"]);
+    ctx.req.let_go_of_body();
     let token = form.get("token");
     let Some(invite) = find_live_invite(app.db(), token).await? else { return Ok(invitation_not_valid(app)) };
     let here = token_link("/invite", token);
@@ -333,8 +341,12 @@ pub async fn get_activate(ctx: Ctx) -> Result<Response> {
 
 pub async fn post_activate(ctx: Ctx) -> Result<Response> {
     let app = &ctx.app;
-    let form = read_form(&ctx.req)?;
+    let mut form = read_form(&ctx.req)?;
     check_form(app, &ctx.req, &form)?;
+    // Kept: what this handler reads. The body goes before the waits on the
+    // breached-password check and the hasher (the body budget, server.rs).
+    form.keep(&["token", "password"]);
+    ctx.req.let_go_of_body();
     let token = form.get("token");
     let not_valid = || message_page(app, 404, "Link not valid", "This activation link has expired or was already used.", None, Extras::default());
     let Some(user) = token_user(app, Purpose::Activate, token).await? else { return Ok(not_valid()) };
@@ -423,8 +435,12 @@ pub async fn get_reset(ctx: Ctx) -> Result<Response> {
 /// lookup, the token and the email all happen after the response.
 pub async fn post_reset(ctx: Ctx) -> Result<Response> {
     let app = &ctx.app;
-    let form = read_form(&ctx.req)?;
+    let mut form = read_form(&ctx.req)?;
     check_form(app, &ctx.req, &form)?;
+    // Kept: what this handler reads. The body goes before the waits on the
+    // breached-password check and the hasher (the body budget, server.rs).
+    form.keep(&["login", "action", "password", "code"]);
+    ctx.req.let_go_of_body();
     let login = utf16_prefix(js_trim(form.get("login").unwrap_or("")), 254).to_string();
     if form.get("action") == Some("recovery") {
         return reset_with_recovery_code(&ctx, &login, &form).await;
@@ -600,8 +616,12 @@ pub async fn get_reset_confirm(ctx: Ctx) -> Result<Response> {
 /// A reset link also needs the second factor when one is enrolled (§9.1).
 pub async fn post_reset_confirm(ctx: Ctx) -> Result<Response> {
     let app = &ctx.app;
-    let form = read_form(&ctx.req)?;
+    let mut form = read_form(&ctx.req)?;
     check_form(app, &ctx.req, &form)?;
+    // Kept: what this handler reads. The body goes before the waits on the
+    // breached-password check and the hasher (the body budget, server.rs).
+    form.keep(&["token", "password", "code", "passkey"]);
+    ctx.req.let_go_of_body();
     let token = form.get("token");
     let here = token_link("/reset/confirm", token);
     let back = Some((here.as_str(), "Back"));

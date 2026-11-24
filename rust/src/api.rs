@@ -275,8 +275,14 @@ pub async fn change_password(ctx: Ctx) -> Result<Response> {
     let session = signed_in(app, &ctx.req).await?;
     require_recent(app, &session).await?;
     let body = read_json(&ctx.req)?;
+    // Taken: what this handler reads. The body goes before the waits on the
+    // hasher and the breached-password check (the body budget, server.rs).
+    let new = body.get("new").and_then(Value::as_str).map(str::to_string);
+    let current = body.get("current").and_then(Value::as_str).map(|c| utf16_prefix(c, 1024).to_string());
+    drop(body);
+    ctx.req.let_go_of_body();
     let user = user_or_404(app, &session.user_id).await?;
-    let Some(new) = body.get("new").and_then(Value::as_str) else { bail!(400, "invalid_request", "new is required.") };
+    let Some(new) = new.as_deref() else { bail!(400, "invalid_request", "new is required.") };
     // Guessing the current password is held to the sign-in limits (§9.4).
     let per_ip = hit(app.db(), &format!("ip:{}:login", ctx.ip().unwrap_or("unknown")), 30, 15 * 60).await?;
     if !per_ip.allowed {
@@ -287,8 +293,7 @@ pub async fn change_password(ctx: Ctx) -> Result<Response> {
         return Err(Error::Http(HttpError::with(429, "rate_limited", "Too many failed attempts.", retry_after(wait.retry_after))));
     }
     if let Some(stored) = &user.password_hash {
-        let current = body.get("current").and_then(Value::as_str).map(|c| utf16_prefix(c, 1024)).unwrap_or("");
-        if !app.hasher.verify(current, Some(stored)).await.ok {
+        if !app.hasher.verify(current.as_deref().unwrap_or(""), Some(stored)).await.ok {
             record_failure(app.db(), &account_key(&user.id)).await?;
             bail!(403, "forbidden", "The current password is wrong.");
         }

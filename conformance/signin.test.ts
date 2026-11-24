@@ -1697,6 +1697,30 @@ describe.skipIf(!enabled)("signing in", () => {
       await expectRefused(b, await finish(b, "{}", { type: "application/json; charset=utf-8" }));
     });
 
+    test("sign-ins padded to 64 KiB, queued on the password hasher, hold up no other request with a body", async () => {
+      // Each names no account, so each waits its turn on the one hash slot;
+      // the Rust server lets go of the body first (DESIGN §10).
+      const browsers = Array.from({ length: 16 }, () => stack.browser());
+      for (const b of browsers) await b.formCsrf();
+      let answered = 0;
+      const signIns = browsers.map(async (b) => {
+        const res = await b.form("/login", { login: `nobody-${randomBytes(4).toString("hex")}`, password: "x", padding: "a".repeat(64 * 1024 - 400) });
+        await res.body?.cancel();
+        answered++;
+        return res.status;
+      });
+      await Bun.sleep(100);
+      const before = answered;
+      const small = await stack.browser().request("/login/passkey/options", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const meanwhile = answered - before;
+      expect(small.status).toBe(200);
+      await small.body?.cancel();
+      expect(await Promise.all(signIns)).toEqual(browsers.map(() => 401));
+      // Most were still waiting when it was sent, and it didn't wait for them.
+      expect(before).toBeLessThanOrEqual(4);
+      expect(meanwhile).toBeLessThanOrEqual(2);
+    });
+
     test("a burst of the largest bodies is answered, each as it would be alone", async () => {
       // 64 KiB each, of small objects: the shape that costs a parser the
       // most, which the Rust server takes in turn (DESIGN §10).
