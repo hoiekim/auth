@@ -9,6 +9,7 @@ import { issueToken } from "./tokens";
 import { transaction } from "./tx";
 import { insertUser, MAX_NAME, USERNAME } from "./users";
 import { cut } from "./text";
+import { parseJson } from "./json";
 
 // Moving an app's users and API keys into auth (docs/DESIGN.md §12.5, §13).
 // One JSON object per line. Every line is checked before anything is
@@ -42,7 +43,7 @@ function parseLines(text: string, problems: string[]): Line[] {
     if (raw.trim() === "") return;
     let value: unknown;
     try {
-      value = JSON.parse(raw);
+      value = parseJson(raw);
     } catch {
       problems.push(`line ${i + 1}: not valid JSON`);
       return;

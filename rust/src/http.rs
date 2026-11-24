@@ -2,7 +2,10 @@
 //! every error has the one shape docs/DESIGN.md §7.7 defines:
 //! {"error": "<code>", "error_description": "<text>"}.
 
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
 use serde_json::{json, Map, Value};
+use tokio::sync::SemaphorePermit;
 use url::Url;
 
 use crate::error::{Error, HttpError, Result};
@@ -24,10 +27,31 @@ pub struct Request {
     pub url: Url,
     /// Lower-case names, in the order received.
     pub headers: Vec<(String, String)>,
-    pub body: Vec<u8>,
+    /// The body, and its share of the body budget (server.rs `admit`), until
+    /// the request is answered or the handler lets go of them.
+    body: Mutex<Vec<u8>>,
+    share: Mutex<Option<SemaphorePermit<'static>>>,
+}
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Request {
+    pub fn new(method: String, url: Url, headers: Vec<(String, String)>, body: Vec<u8>, share: Option<SemaphorePermit<'static>>) -> Request {
+        Request { method, url, headers, body: Mutex::new(body), share: Mutex::new(share) }
+    }
+
+    /// Lets go of the body, and of its share of the body budget, once the
+    /// handler has what it needs from it: before it waits on the password
+    /// hasher or the breached-password check, so that a request queued there
+    /// holds no share another request is waiting for, and no body. What the
+    /// handler keeps of a form is trimmed first (`Params::keep`).
+    pub fn let_go_of_body(&self) {
+        *lock(&self.body) = Vec::new();
+        lock(&self.share).take();
+    }
+
     /// A header's value. One sent several times reads as the values joined,
     /// as the Fetch API joins them: cookies with "; ", the others with ", ".
     pub fn header(&self, name: &str) -> Option<String> {
@@ -58,7 +82,7 @@ impl Request {
 
     /// The body as text.
     pub fn text(&self) -> String {
-        String::from_utf8_lossy(&self.body).into_owned()
+        String::from_utf8_lossy(&lock(&self.body)).into_owned()
     }
 }
 
@@ -74,6 +98,20 @@ impl Params {
 
     pub fn has(&self, name: &str) -> bool {
         self.0.iter().any(|(k, _)| k == name)
+    }
+
+    /// Keeps the first value of each of `names`, all `get` can answer for
+    /// them, and lets the rest go, before a handler waits with the form in
+    /// hand (`Request::let_go_of_body`). Not for a form read with `single`.
+    pub fn keep(&mut self, names: &[&str]) {
+        let mut kept: Vec<(String, String)> = Vec::new();
+        for (k, v) in self.0.drain(..) {
+            if names.contains(&k.as_str()) && !kept.iter().any(|(seen, _)| *seen == k) {
+                kept.push((k, v));
+            }
+        }
+        kept.shrink_to_fit();
+        self.0 = kept;
     }
 
     /// One value of a parameter; a repeated parameter is refused, as OAuth

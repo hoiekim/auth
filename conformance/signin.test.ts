@@ -1697,11 +1697,61 @@ describe.skipIf(!enabled)("signing in", () => {
       await expectRefused(b, await finish(b, "{}", { type: "application/json; charset=utf-8" }));
     });
 
-    test("a body nested as deep as 64 KiB holds is read like any other, and the server keeps answering", async () => {
+    test("sign-ins padded to 64 KiB, queued on the password hasher, hold up no other request with a body", async () => {
+      // Each names no account, so each waits its turn on the one hash slot;
+      // the Rust server lets go of the body first (DESIGN §10). The small
+      // request goes once the first is answered, so the rest are queued
+      // however fast this machine hashes.
+      const browsers = Array.from({ length: 24 }, () => stack.browser());
+      for (const b of browsers) await b.formCsrf();
+      let answered = 0;
+      let firstAnswered!: () => void;
+      const first = new Promise<void>((resolve) => (firstAnswered = resolve));
+      const signIns = browsers.map(async (b) => {
+        const res = await b.form("/login", { login: `nobody-${randomBytes(4).toString("hex")}`, password: "x", padding: "a".repeat(64 * 1024 - 400) });
+        await res.body?.cancel();
+        if (++answered === 1) firstAnswered();
+        return res.status;
+      });
+      await first;
+      const before = answered;
+      const small = await stack.browser().request("/login/passkey/options", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const meanwhile = answered - before;
+      expect(small.status).toBe(200);
+      await small.body?.cancel();
+      expect(await Promise.all(signIns)).toEqual(browsers.map(() => 401));
+      // Most were still queued when it was sent, and it didn't wait for them.
+      expect(before).toBeLessThanOrEqual(browsers.length / 2);
+      expect(meanwhile).toBeLessThanOrEqual(2);
+    });
+
+    test("a burst of the largest bodies is answered, each as it would be alone", async () => {
+      // 64 KiB each, of small objects: the shape that costs a parser the
+      // most, which the Rust server takes in turn (DESIGN §10).
+      const body = `{"response":[${Array.from({ length: Math.floor((64 * 1024 - 16) / 8) }, () => '{"a":0}').join(",")}]}`;
+      expect(body.length).toBeGreaterThan(63 * 1024);
+      expect(body.length).toBeLessThanOrEqual(64 * 1024);
+      const answers = await Promise.all(
+        Array.from({ length: 24 }, async () => {
+          const res = await finish(stack.browser(), body);
+          return `${res.status} ${((await res.json()) as { error_description?: string }).error_description}`;
+        }),
+      );
+      expect(new Set(answers)).toEqual(new Set([`401 ${DIDNT_WORK}`]));
+      expect((await fetch(`${stack.url}/healthz`)).status).toBe(200);
+    });
+
+    test("a body nested 64 levels deep is read; deeper, as deep as 64 KiB holds included, is not JSON", async () => {
       const b = stack.browser();
       await begin(b);
-      await expectRefused(b, await finish(b, nest('{"response":<nest>}')));
-      await expectJsonError(await finish(b, nest("<nest>")), 400, "invalid_request", "The body must be a JSON object.");
+      // The body is a level, and each array another.
+      const levels = (n: number) => `{"response":${"[".repeat(n - 1)}${"]".repeat(n - 1)}}`;
+      await expectRefused(b, await finish(b, levels(64)));
+      for (const body of [levels(65), nest('{"response":<nest>}'), nest("<nest>")]) {
+        await expectJsonError(await finish(b, body), 400, "invalid_request", "The body is not valid JSON.");
+      }
+      // Refused before the per-IP count.
+      expect(await throttleHits(`ip:${b.ip}:login`)).toBe(1);
       expect((await fetch(`${stack.url}/healthz`)).status).toBe(200);
     });
 

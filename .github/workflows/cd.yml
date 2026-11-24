@@ -2,7 +2,8 @@ name: CD
 
 # Publishes the image to Docker Hub after CI passes on a push to main, then
 # asks the deployment hook in the DEPLOY_URL secret, when there is one, to
-# deploy it (docs/DEPLOYMENT.md §2).
+# deploy it (docs/DEPLOYMENT.md §2). The image is the Rust server's,
+# rust/Dockerfile (docs/DESIGN.md §16); the Bun server's isn't published.
 on:
   workflow_run:
     workflows: [CI]
@@ -23,7 +24,8 @@ jobs:
   docker-push:
     if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # As CI's rust-image job: the image's builder compiles and tests the server.
+    timeout-minutes: 20
     outputs:
       sha: ${{ steps.tip.outputs.sha }}
       digest: ${{ steps.push.outputs.digest }}
@@ -66,7 +68,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          file: ./Dockerfile
+          file: ./rust/Dockerfile
           push: true
           tags: |
             ${{ secrets.DOCKER_HUB_USERNAME }}/auth:latest

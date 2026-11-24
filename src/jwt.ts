@@ -1,5 +1,6 @@
 import { sign, verify, type KeyObject } from "node:crypto";
 import { base64url, fromBase64url } from "./crypto";
+import { parseJson } from "./json";
 
 // JWTs signed with Ed25519 (docs/DESIGN.md §7.3). `alg` is EdDSA by
 // construction: a verifier never reads it from the token to decide anything,
@@ -42,8 +43,8 @@ export function verifyJwt(
   let header: unknown;
   let payload: unknown;
   try {
-    header = JSON.parse(fromBase64url(h).toString("utf8"));
-    payload = JSON.parse(fromBase64url(p).toString("utf8"));
+    header = parseJson(fromBase64url(h).toString("utf8"));
+    payload = parseJson(fromBase64url(p).toString("utf8"));
   } catch {
     return null;
   }

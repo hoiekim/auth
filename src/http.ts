@@ -1,3 +1,5 @@
+import { parseJson } from "./json";
+
 // Response helpers. Every response carries the security headers, and every
 // error has the one shape docs/DESIGN.md §7.7 defines:
 // {"error": "<code>", "error_description": "<text>"}.
@@ -124,7 +126,7 @@ export async function readJson(req: Request): Promise<Record<string, unknown>> {
   const text = await readText(req);
   let body: unknown;
   try {
-    body = text ? JSON.parse(text) : {};
+    body = text ? parseJson(text) : {};
   } catch {
     throw new HttpError(400, "invalid_request", "The body is not valid JSON.");
   }

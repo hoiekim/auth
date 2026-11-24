@@ -239,7 +239,7 @@ The fields of a service:
 | `clients` | yes | One or more, each with an `id` unique across every service (`[a-z0-9][a-z0-9._-]{0,63}`), a `type` (`confidential` or `public`), `redirect_uris` and optional `post_logout_redirect_uris`. Both lists hold absolute URIs without a fragment or credentials: `https`, `http` only for a loopback host (`localhost`, `127.0.0.1` or `[::1]`, RFC 8252 §7.3), or, for a public client, a private-use scheme that is a reverse domain name with a dot, such as `com.example.tasks:` (RFC 8252 §7.1). A registered client's `id` and `type` never change (§6.2). |
 | `events_url` | no | Where §7.4's events go: an `http` or `https` URL, on any host, without credentials or a fragment. A service without one relies on the pull (§7.1), and on reading its pending invites (§12.6). |
 
-The file is checked at start, like every other setting: a file that breaks any rule above stops the start, and every problem is listed at once. An unknown field is a problem too. A problem names a bad entry as JSON, or, when it nests more than 64 levels deep, says so. A registration is checked against the same rules and refused with every problem listed. Where the file would leave a field out, it may also write `[]` for a list, or `null` for `default_role` and `events_url`, as `GET /v1/services` answers. The `source`, `secrets` and `held` fields that `GET`, `POST` and `PUT` add to their answers are not part of a definition: a body that carries them is refused for its unknown fields. It is capped so that every copy can hold every service: at most 100 registered services, each with at most 32 roles, 32 scopes of each kind and 5 clients, each client with at most 10 redirect URIs and 10 sign-out URIs, and each URI at most 1024 characters.
+The file is checked at start, like every other setting: a file that breaks any rule above stops the start, and every problem is listed at once. An unknown field is a problem too. A registration is checked against the same rules and refused with every problem listed. Where the file would leave a field out, it may also write `[]` for a list, or `null` for `default_role` and `events_url`, as `GET /v1/services` answers. The `source`, `secrets` and `held` fields that `GET`, `POST` and `PUT` add to their answers are not part of a definition: a body that carries them is refused for its unknown fields. It is capped so that every copy can hold every service: at most 100 registered services, each with at most 32 roles, 32 scopes of each kind and 5 clients, each client with at most 10 redirect URIs and 10 sign-out URIs, and each URI at most 1024 characters.
 
 Rules, in full:
 1. **Default deny.** No access row means no sign-in to the service: auth answers 403 with a page that says "you don't have access to wiki", and issues no code (a `prompt=none` request gets `access_denied`). The one exception is a service with `signup: "open"`, which gives a signed-in user without a row its `default_role`, and writes that row.
@@ -799,7 +799,7 @@ CREATE UNLOGGED TABLE throttle (                      -- shared across every cop
   - **Rotating the key** takes four deploys, so two copies running side by side can always read what the other writes:
     1. Add the new key to `AUTH_DECRYPTION_KEYS`. Every copy can now read it.
     2. Make it `AUTH_ENCRYPTION_KEY`, and move the old one to `AUTH_DECRYPTION_KEYS`.
-    3. Run `bun cli.ts encryption reencrypt`, which rewrites every TOTP secret and private signing key under the new key. `bun cli.ts encryption status` then shows none left under the old one.
+    3. Run `auth cli encryption reencrypt`, which rewrites every TOTP secret and private signing key under the new key. `auth cli encryption status` then shows none left under the old one.
     4. Remove the old key. Keep it offline for as long as backups taken before step 3 are kept.
 
     CSRF tokens and the short-lived sealed values handed to browsers (§9.2) are derived from the key; each is accepted under any configured key, so a rotation signs nobody out.
@@ -823,7 +823,7 @@ Counters live in the `throttle` table, so every copy shares them and a restart d
 | A recovery code outside a sign-in (the U6 reset) | the per-account and per-IP sign-in limits above |
 | Emails from sign-up, the reset page, a change of one's own email, and invitations | 3 per hour per address, and 10 per hour per sender: the IP on auth's pages, the signed-in user or the app's client on the API; the answer is the same whether or not the address exists. The activation and reset links an `auth:admin` sends aren't counted. |
 | Account creation (sign-up on an open service, a new account from an invitation, or, once platform sign-in is built, a first platform sign-in, §12.3) | 10 per hour per IP |
-| A request, on any connection | A head of at most 16 KiB and 198 headers (`431` past either), a body of at most 64 KiB (`413`), and about 10 seconds to send a request, or between requests on a kept connection, after which the connection is closed unanswered. HTTP/1.0 gets one answer per connection. |
+| A request, on any connection | A head of at most 16 KiB and 198 headers (`431` past either), a body of at most 64 KiB (`413`), JSON nested at most 64 levels deep in a body, a file, an import line or a token (deeper is read as JSON that doesn't parse: a body's answer is `400`), and about 10 seconds to send a request, or between requests on a kept connection, after which the connection is closed unanswered. HTTP/1.0 gets one answer per connection. |
 | `/oauth/token` per client | 60 per minute |
 | `/oauth/introspect` per client | 600 per minute. Failures are counted per client (1000 an hour) and per end-user address the client names (10 per 15 minutes; the exception above), so a protocol server's brute-force limits stay effective. Past either, the answer is `429`. A back channel through the proxy arrives with the proxy's `X-Real-IP`, the client's own address; that one keys no per-address counter, which would put all the client's users in one bucket. |
 
@@ -856,16 +856,16 @@ Counters live in the `throttle` table, so every copy shares them and a restart d
 
 **Keep the tools that repair auth outside it.** A deployment's deploy pipeline must not need an auth sign-in, or a broken auth release couldn't deploy its own fix. At least one way into its monitoring and logs must also work without auth, or an auth outage couldn't even be seen.
 
-**Break-glass CLI**, run inside a running auth container by whoever can reach it, so it works whichever copy is up:
+**Break-glass CLI**, run inside a running auth container by whoever can reach it, so it works whichever copy is up. It is `auth cli` in the published image, and `bun cli.ts` in the Bun server's (§16):
 
 ```sh
-bun cli.ts user create --username alice --email alice@example.com --access auth:admin
-bun cli.ts user create --username mailer --bot --owner alice --access mailbox:user   # a bot user (A9)
-bun cli.ts user clear-mfa alice
-bun cli.ts client secret wiki        # prints a new secret once
-bun cli.ts encryption status         # rows per encryption key version (§9.3)
-bun cli.ts help                      # also: user disable / enable / reset-link, client retire-old-secrets,
-                                     # encryption reencrypt, import users / api-keys (§12.5, §13), migrate
+auth cli user create --username alice --email alice@example.com --access auth:admin
+auth cli user create --username mailer --bot --owner alice --access mailbox:user   # a bot user (A9)
+auth cli user clear-mfa alice
+auth cli client secret wiki        # prints a new secret once
+auth cli encryption status         # rows per encryption key version (§9.3)
+auth cli help                      # also: user disable / enable / reset-link, client retire-old-secrets,
+                                   # encryption reencrypt, import users / api-keys (§12.5, §13), migrate
 ```
 
 Every change the CLI makes to users, access, client secrets, encryption or imported data is audited as `host-cli` and posted to the alert webhook, if one is configured. Before any command but `help` and `migrate`, the CLI applies pending migrations and rotates a signing key that is due, as the server does at start; `migrate` only applies the migrations. Neither is audited or alerted.
@@ -885,6 +885,7 @@ Every change the CLI makes to users, access, client secrets, encryption or impor
 
 **Resources**
 - **Memory and CPU:** designed for a 64 MB limit and half a CPU. Measured under Bun 1.4.4 at that limit, the memory the kernel can't reclaim is 9–13 MiB at rest and peaked at 33 MiB during bursts of 40 concurrent sign-ins, under an 85% alarm line of 54 MB; one argon2id hash is 19 MiB of that (§9.1). RSS reads higher, 40–60 MB, because it counts the Bun binary's file-backed pages, which the kernel can drop. A deployment that expects bursts of sign-ins should measure its peak and raise the limit if needed.
+- **Request bodies:** at most 64 KiB each, nested at most 64 levels (§9.4). A body costs more than its size while it is answered: in the Rust server a parsed JSON value is 72 bytes, so a 64 KiB body of small values takes up to 4.5 MiB while it is parsed and about 2 MiB after, and 16 at once would fill 64 MB. So the Rust server answers bodies within a budget of 256 KiB at a time, counted by size: a body that would pass it waits, in order of arrival, until an earlier one has been answered. The answers are the same, only later. A handler that waits on the password hasher or the breached-password check lets go of its body first, keeping only the fields it reads, so sign-ins queued for the hasher hold up no other request. The Bun server's values are smaller: it answered 16 such bodies at once, beside a burst of sign-ins, in 53 MiB.
 - **Database load** is dominated by refreshes, one per active session per 10 minutes. At 50 active sessions that is about 0.1 queries per second. The pool is 5 connections.
 - **Services** are kept in each copy and checked against their revision once per request (§6.2): one single-row read, skipped by health checks and static files. A change reloads them in one query.
 - **The apps** gain a small client and a JWKS of a few hundred bytes. They lose their password hashing, so peak memory falls.
@@ -893,7 +894,7 @@ Every change the CLI makes to users, access, client secrets, encryption or impor
 
 `docs/DEPLOYMENT.md` is the guide. What the design asks of every deployment:
 
-- **Image.** CD publishes it from `main` once CI passes and, when the repository names a deploy hook (`DEPLOY_URL`), posts the pushed image's digest to that hook to deploy. A deployment either follows releases through such a hook, so that a merge here is a release to it, or runs the image **pinned by digest** and moves the pin through a change it reviews, so that a push to this repo can't reach it on its own. Either way it runs an image by digest, never by a tag someone could push over.
+- **Image.** CD publishes it, the Rust server's (§16), from `main` once CI passes and, when the repository names a deploy hook (`DEPLOY_URL`), posts the pushed image's digest to that hook to deploy. A deployment either follows releases through such a hook, so that a merge here is a release to it, or runs the image **pinned by digest** and moves the pin through a change it reviews, so that a push to this repo can't reach it on its own. Either way it runs an image by digest, never by a tag someone could push over.
 - **Runtime.**
   - One container behind a TLS-terminating proxy that sets `X-Real-IP` from the connecting address. No ports published on the host.
   - 64 MB and half a CPU (§10).
@@ -948,7 +949,7 @@ For IMAP, SMTP, CalDAV, WebDAV and the like:
 ### 12.5 API keys for an app's API
 
 - **The app checks a `Bearer` key with `auth.introspect`**, and gets back its owner, the owner's current role on the service, and the key's scopes. It authorizes the request by both: a scope grants only what the role also allows, so a key loses power when its owner is moved to a lower role (rule 3). The service declares its scopes in its definition (§6).
-- **An app with its own key table can move it into auth:** copy each key's hash, scopes, expiry and revocation into `credentials`, with its owner mapped through `auth_sub`. When the old hashes are SHA-256 of the full key, introspection finds them by hash, so **existing keys keep working without reissue**. The CLI does the copy: `bun cli.ts import api-keys --service <name> <file>` reads one JSON object per line, `{"owner", "sha256", "scopes", "name"?, "expires_at"?, "revoked_at"?, "created_at"?, "last_used_at"?}`, where `owner` is the user's `sub` or username and `sha256` is the key's hash in hex or base64. Each owner must already hold a role on the service.
+- **An app with its own key table can move it into auth:** copy each key's hash, scopes, expiry and revocation into `credentials`, with its owner mapped through `auth_sub`. When the old hashes are SHA-256 of the full key, introspection finds them by hash, so **existing keys keep working without reissue**. The CLI does the copy: `auth cli import api-keys --service <name> <file>` reads one JSON object per line, `{"owner", "sha256", "scopes", "name"?, "expires_at"?, "revoked_at"?, "created_at"?, "last_used_at"?}`, where `owner` is the user's `sub` or username and `sha256` is the key's hash in hex or base64. Each owner must already hold a role on the service.
 
 ### 12.6 An app with resources inside it, and its own members
 
@@ -998,7 +999,7 @@ An app that sends mail through a mail server, or a job that writes to another ap
 4. **Password-only protocols:** users create app passwords, and then a cutover date turns off the old local passwords.
 5. **Clean up:** remove local sign-in code, password columns and flags, one release after nothing has used the fallbacks (the app's own count of local sign-ins is 0).
 
-**Moving existing users.** For a handful of people, create their accounts with the CLI and let auth email each one an activation link (set a password, enroll TOTP). That is simpler and safer than importing hashes. For more users, import their existing password hashes as a one-off: `Bun.password.verify` reads argon2id and bcrypt PHC strings and re-hashes to argon2id at the first sign-in. Note that bcrypt reads only the first 72 bytes of a password, and some apps truncate before hashing; an import has to verify the way the source app hashed, so a bcrypt hash is verified against the first 72 bytes. An imported hash is verified at its own cost until that first sign-in, behind the same hashing slot, so only hashes within §9.1's budget are taken: argon2id, argon2i or argon2d with at most m = 19 MiB, t = 3 and p = 4, or bcrypt with a cost of at most 12. A hash that costs more is refused, like any other problem; left out of the line, it gives its user an activation link instead. `bun cli.ts import users <file>` reads one JSON object per line, `{"username", "email", "name"?, "email_verified"?, "password_hash"?, "access"?: {"<service>": "<role>"}}`. A user without a password hash gets an activation link, as with `user create`.
+**Moving existing users.** For a handful of people, create their accounts with the CLI and let auth email each one an activation link (set a password, enroll TOTP). That is simpler and safer than importing hashes. For more users, import their existing password hashes as a one-off: `Bun.password.verify` reads argon2id and bcrypt PHC strings and re-hashes to argon2id at the first sign-in. Note that bcrypt reads only the first 72 bytes of a password, and some apps truncate before hashing; an import has to verify the way the source app hashed, so a bcrypt hash is verified against the first 72 bytes. An imported hash is verified at its own cost until that first sign-in, behind the same hashing slot, so only hashes within §9.1's budget are taken: argon2id, argon2i or argon2d with at most m = 19 MiB, t = 3 and p = 4, or bcrypt with a cost of at most 12. A hash that costs more is refused, like any other problem; left out of the line, it gives its user an activation link instead. `auth cli import users <file>` reads one JSON object per line, `{"username", "email", "name"?, "email_verified"?, "password_hash"?, "access"?: {"<service>": "<role>"}}`. A user without a password hash gets an activation link, as with `user create`.
 
 Both imports are all or nothing: every line is checked first, every problem is listed by line number without echoing a hash, and nothing is written unless all pass. An import takes at most 10,000 lines and 8 MB, and an owner holds at most 100 live API keys, as when they create their own. `--dry-run` stops after the checks, and `-` in place of the file reads standard input, so a file on the operator's machine can be piped into `docker exec -i`. Each imported row is audited as `host-cli`.
 
@@ -1063,9 +1064,11 @@ how JSON and CBOR text are read (`JSON.parse`, `TextDecoder`).
 The Rust server reproduces those too. `rust/tests/database_urls.json`
 records Bun's reading of each case, CI checks that the Bun it runs still
 reads them so, and the Rust server's tests check its own reading against
-them. `JSON.parse` has no depth limit, so neither server may recurse through
-a parsed value on a stack that can't hold it: the deepest 64 KiB body nests
-32,000 levels, and a services file or an import line millions. A change to
+them. One exception is deliberate: JSON nested more than 64 levels deep is
+read by neither, in a body, a file, an import line or a token (§9.4), though
+`JSON.parse` takes any depth. A 64 KiB body nested 32,000 levels deep held
+2 MiB in the Bun server and 9 MiB in the Rust one while it was answered, and
+a burst of them took either past the 64 MB limit (§10). A change to
 behaviour is made in both, with a test both pass.
 
 **Dependencies.** The Rust server has no runtime's built-ins to lean on, so
@@ -1090,13 +1093,16 @@ with `--locked`. A deployment that runs the Rust image trusts that list where
 **What a deployment sees differ.**
 - The CLI's name, in its commands and in the messages that name it.
 - The image: `rust/Dockerfile` builds one binary onto `debian:bookworm-slim`,
-  run as `nobody`, its `HEALTHCHECK` `auth healthcheck`. CD publishes the
-  Bun image only (`docs/DEPLOYMENT.md`).
+  run as `nobody`, its `HEALTHCHECK` `auth healthcheck`. CD publishes this
+  image, not the Bun one, which a deployment that wants it builds from
+  `Dockerfile` (`docs/DEPLOYMENT.md`).
 - Memory. Measured alike, with no limit, around five rounds of 40
   concurrent password sign-ins: the Rust server's RSS was 9 MiB at rest and
   31 MiB after, 22 MiB of it anonymous, mostly the one 19 MiB argon2id
   work area it keeps for the next hash; the Bun server's was 40 MiB at rest
-  and 92 MiB after (58 MiB anonymous), 53 MiB a few seconds later.
+  and 92 MiB after (58 MiB anonymous), 53 MiB a few seconds later. Under a
+  burst of large request bodies the Rust server answers them in turn,
+  within its body budget (§10), where the Bun server takes them all at once.
 - A `.env` file: Bun reads one in its working directory; the Rust server
   reads its environment alone.
 - In `DATABASE_URL`: `prepare=false`, which turns off the Bun client's

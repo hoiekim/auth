@@ -2,8 +2,10 @@
 //! request body, the services file, a token's parts, WebAuthn's client data,
 //! an import line. Stricter readers would refuse what the Bun server takes:
 //!
-//! - nesting has no depth limit, so what holds a value must not recurse
-//!   through it on a small stack (`Held`, and `STACK_BYTES` in main.rs);
+//! - nesting is capped at `MAX_DEPTH` levels, as the Bun server's
+//!   `parseJson` caps it: deeper, the text isn't read as JSON at all. A
+//!   64 KiB body could otherwise nest 32,000 levels, and hold megabytes
+//!   while it is answered;
 //! - a number is a double: `1e400` is Infinity, held as the largest finite
 //!   double of its sign, which compares as Infinity does with any time or
 //!   count; a whole number is kept as an integer, as JavaScript prints it;
@@ -14,6 +16,9 @@
 //!   JavaScript object.
 
 use serde_json::{Map, Number, Value};
+
+/// The deepest nesting read, counting every array and object, empty or not.
+pub const MAX_DEPTH: usize = 64;
 
 pub fn parse(text: &str) -> Option<Value> {
     let mut p = Parser { s: text.as_bytes(), text, i: 0 };
@@ -26,7 +31,11 @@ pub fn parse(text: &str) -> Option<Value> {
     let mut stack: Vec<Open> = Vec::new();
     loop {
         p.space();
-        // A value starts here: a scalar, or a container opened.
+        // A value starts here: a scalar, or a container opened, one level
+        // deeper than those still open.
+        if matches!(p.peek(), Some(b'[' | b'{')) && stack.len() >= MAX_DEPTH {
+            return None;
+        }
         let mut value = match p.peek()? {
             b'[' => {
                 p.i += 1;
@@ -71,7 +80,10 @@ pub fn parse(text: &str) -> Option<Value> {
                     if !p.eat(b']') {
                         return None;
                     }
-                    let Some(Open::Array(items)) = stack.pop() else { return None };
+                    // Without its spare room: a value is 72 bytes, and an
+                    // array grows room for four at its first.
+                    let Some(Open::Array(mut items)) = stack.pop() else { return None };
+                    items.shrink_to_fit();
                     value = Value::Array(items);
                 }
                 Some(Open::Object(map, key)) => {
@@ -84,43 +96,16 @@ pub fn parse(text: &str) -> Option<Value> {
                     if !p.eat(b'}') {
                         return None;
                     }
+                    // Without its spare room, as an array: an object of one
+                    // member grows room for three at its first.
                     let Some(Open::Object(map, _)) = stack.pop() else { return None };
-                    value = Value::Object(indices_first(map));
+                    let map = indices_first(map);
+                    let mut exact = Map::with_capacity(map.len());
+                    exact.extend(map);
+                    value = Value::Object(exact);
                 }
             }
         }
-    }
-}
-
-/// Takes a value apart without recursion. serde_json's own drop, like its
-/// clone, `==` and `Debug`, takes a stack frame for each level of nesting.
-pub fn discard(value: Value) {
-    let mut pending = vec![value];
-    while let Some(value) = pending.pop() {
-        match value {
-            Value::Array(items) => pending.extend(items),
-            Value::Object(map) => pending.extend(map.into_iter().map(|(_, v)| v)),
-            _ => {}
-        }
-    }
-}
-
-/// A value parsed from an input larger than a request body, an import line
-/// or the services file, which can nest millions of levels deep: however it
-/// goes, it is taken apart without recursion. Read it through references; a
-/// clone, `==` or `Debug` of a deep part would still recurse.
-pub struct Held<T: Into<Value> + Default>(pub T);
-
-impl<T: Into<Value> + Default> Drop for Held<T> {
-    fn drop(&mut self) {
-        discard(std::mem::take(&mut self.0).into());
-    }
-}
-
-impl<T: Into<Value> + Default> std::ops::Deref for Held<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &self.0
     }
 }
 
@@ -288,9 +273,6 @@ mod tests {
     #[test]
     fn reads_what_json_parse_reads() {
         assert_eq!(parse(" {\"a\":[1,2.5,-0,true,false,null,\"x\"]}\n"), Some(json!({ "a": [1, 2.5, 0, true, false, null, "x"] })));
-        // Held: serde_json's own drop of 30,000 levels is about all a test
-        // thread's 2 MiB stack holds.
-        assert!(parse(&format!("{}{}", "[".repeat(30_000), "]".repeat(30_000))).map(Held).is_some_and(|v| v.is_array()));
         assert_eq!(parse("1e400").and_then(|v| v.as_f64()), Some(f64::MAX));
         assert_eq!(parse("-1e400").and_then(|v| v.as_f64()), Some(-f64::MAX));
         assert_eq!(parse("1e-400"), Some(json!(0)));
@@ -307,15 +289,25 @@ mod tests {
     }
 
     #[test]
-    fn takes_apart_any_depth_without_recursion() {
-        // Far deeper than a test thread's stack holds through serde_json's
-        // own drop.
-        let depth = 1_000_000;
-        let text = format!("{{\"a\":{}{}, \"b\":[{{\"c\":{}{}}}]}}", "[".repeat(depth), "]".repeat(depth), "[".repeat(depth), "]".repeat(depth));
-        let held = Held(parse(&text).expect("parses"));
-        assert!(held["a"].is_array() && held["b"][0]["c"].is_array());
-        drop(held);
-        discard(parse(&text).expect("parses"));
+    fn reads_64_levels_and_no_more() {
+        let nested = |levels: usize, inner: &str| format!("{}{inner}{}", "[".repeat(levels), "]".repeat(levels));
+        assert!(parse(&nested(64, "")).is_some());
+        assert!(parse(&nested(63, "1")).is_some());
+        assert!(parse(&nested(65, "")).is_none(), "an empty array is a level too");
+        assert!(parse(&nested(64, "{}")).is_none());
+        assert!(parse(&nested(30_000, "")).is_none());
+        // Objects count as arrays do, and brackets in strings not at all.
+        let objects = format!("{}1{}", "{\"a\":".repeat(64), "}".repeat(64));
+        assert!(parse(&objects).is_some());
+        assert!(parse(&format!("[{objects}]")).is_none());
+        assert_eq!(parse(&format!("[\"{}\"]", "[{".repeat(100))).map(|v| v[0].as_str().map(str::len)), Some(Some(200)));
+    }
+
+    #[test]
+    fn an_array_keeps_no_spare_room() {
+        let Some(Value::Array(outer)) = parse("[[1],[2,3],[]]") else { panic!("an array") };
+        assert_eq!(outer.capacity(), 3);
+        assert!(outer.iter().all(|v| v.as_array().is_some_and(|a| a.capacity() == a.len())));
     }
 
     #[test]

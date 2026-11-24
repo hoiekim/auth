@@ -120,7 +120,7 @@ function likePrefix(q: string): string {
 }
 
 // An id from a body: one that isn't a string can only miss. String() would
-// turn ["usr_…"] into that user's id, and recurse through a deep array.
+// turn ["usr_…"] into that user's id.
 function idOf(value: unknown): string {
   return typeof value === "string" ? value : "";
 }

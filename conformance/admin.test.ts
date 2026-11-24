@@ -527,9 +527,9 @@ describe.skipIf(!enabled)("administration API", () => {
       await expectError(await root.api("POST", "/v1/users", { username: uname("b"), kind: "bot", owner_id: newId("usr") }), 404, "not_found", "No such user.");
       await expectError(await root.api("POST", "/v1/users", { username: uname("b"), kind: "bot", owner_id: "nope" }), 404, "not_found", "No such user.");
       await expectError(await root.api("POST", "/v1/users", { username: uname("b"), kind: "bot", owner_id: 42 }), 404, "not_found", "No such user.");
-      // Only a string is an id: not a list holding one, nor a list nested as deep as the body holds.
+      // Only a string is an id, not a list holding one.
       await expectError(await root.api("POST", "/v1/users", { username: uname("b"), kind: "bot", owner_id: [admin.user.id] }), 404, "not_found", "No such user.");
-      await expectError(await root.api("POST", "/v1/users", nest(JSON.stringify({ username: uname("b"), kind: "bot", owner_id: "<nest>" }))), 404, "not_found", "No such user.");
+      await expectError(await root.api("POST", "/v1/users", nest(JSON.stringify({ username: uname("b"), kind: "bot", owner_id: "<nest>" }))), 400, "invalid_request", "The body is not valid JSON.");
       const other = await stack.user({ username: uname("ob"), kind: "bot", ownerId: admin.user.id });
       await expectError(await root.api("POST", "/v1/users", { username: uname("b"), kind: "bot", owner_id: other.id }), 400, "invalid_request", "A bot's owner is a person.");
     });
@@ -748,7 +748,7 @@ describe.skipIf(!enabled)("administration API", () => {
       await expectError(await root.api("PATCH", `/v1/users/${bot.id}`, { owner_id: otherBot.id }), 400, "invalid_request", "A bot's owner is a person.");
       await expectError(await root.api("PATCH", `/v1/users/${bot.id}`, { owner_id: newId("usr") }), 404, "not_found", "No such user.");
       await expectError(await root.api("PATCH", `/v1/users/${bot.id}`, { owner_id: [admin.user.id] }), 404, "not_found", "No such user.");
-      await expectError(await root.api("PATCH", `/v1/users/${bot.id}`, nest(JSON.stringify({ owner_id: "<nest>" }))), 404, "not_found", "No such user.");
+      await expectError(await root.api("PATCH", `/v1/users/${bot.id}`, nest(JSON.stringify({ owner_id: "<nest>" }))), 400, "invalid_request", "The body is not valid JSON.");
       await expectError(await root.api("PATCH", `/v1/users/${next.id}`, { owner_id: admin.user.id }), 400, "invalid_request", "Only a bot user has an owner.");
       expect((await stack.db`SELECT owner_id FROM users WHERE id = ${bot.id}`)[0].owner_id).toBe(next.id);
     });

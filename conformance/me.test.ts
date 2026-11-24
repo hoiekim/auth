@@ -364,12 +364,17 @@ describe.skipIf(!enabled)("the self-service API", () => {
         await expectError(await raw(browser, body, "application/json"), 400, "invalid_request", "The body must be a JSON object.");
       });
 
-      // Read as JSON.parse reads it, in both servers.
-      test("nesting far past a parser's usual limit is read, and what isn't asked for is ignored", async () => {
+      // Read as JSON.parse reads it, in both servers, to 64 levels (DESIGN §9.4).
+      test("nesting to 64 levels is read, and what isn't asked for is ignored; deeper is not JSON", async () => {
         const { browser } = await signedIn("deep");
-        const res = await raw(browser, `{"name":"Deep","extra":${"[".repeat(5000)}${"]".repeat(5000)}}`, "application/json");
+        // The body is a level, and each array another.
+        const body = (levels: number) => `{"name":"Deep","extra":${"[".repeat(levels - 1)}${"]".repeat(levels - 1)}}`;
+        const res = await raw(browser, body(64), "application/json");
         expect(res.status).toBe(200);
         expect(((await res.json()) as any).name).toBe("Deep");
+        for (const levels of [65, 5000]) {
+          await expectError(await raw(browser, body(levels), "application/json"), 400, "invalid_request", "The body is not valid JSON.");
+        }
       });
 
       test("an escaped lone surrogate is read, and stored as U+FFFD", async () => {

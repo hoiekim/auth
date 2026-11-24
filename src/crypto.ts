@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes, timingSafeEqual } from "node:crypto";
+import { parseJson } from "./json";
 
 // Encodings, hashes, ids and encryption at rest (docs/DESIGN.md §7.3, §9.3).
 
@@ -183,7 +184,7 @@ export class Encrypter {
       const sealed = fromBase64url(token);
       const version = Encrypter.versionOf(sealed);
       if (version === null || !this.#keys.has(version)) return null;
-      const body = JSON.parse(open(this.#subkey(version, `sealed:${purpose}`), sealed, purpose).toString("utf8"));
+      const body: any = parseJson(open(this.#subkey(version, `sealed:${purpose}`), sealed, purpose).toString("utf8"));
       if (typeof body !== "object" || body === null || typeof body.exp !== "number" || body.exp < Date.now()) return null;
       return body.v as T;
     } catch {
