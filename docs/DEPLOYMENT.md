@@ -7,7 +7,9 @@ limits) is the deployment's own configuration (`docs/DESIGN.md` §2).
 
 ## 1. The image
 
-`Dockerfile` builds it in two stages:
+There are two, one for each implementation of the service
+(`docs/DESIGN.md` §16), and CD publishes the Rust server's (§2).
+`Dockerfile` builds the Bun server's in two stages:
 
 - **Builder**, on `oven/bun:1.4.4`: installs from `bun.lock`, runs
   `bun run typecheck` and `bun test`, then deletes the test files and
@@ -27,9 +29,8 @@ when it runs. The service reads no `NODE_ENV` at all, and sets
 `development: false` on `Bun.serve` itself, since Bun would otherwise derive
 that from `NODE_ENV`.
 
-**The Rust server's image.** `rust/Dockerfile` builds the other
-implementation of the service (`docs/DESIGN.md` §16), from the repository
-root: `docker build -f rust/Dockerfile .`. Its builder, on
+**The Rust server's image**, the one CD publishes. `rust/Dockerfile` builds
+it from the repository root: `docker build -f rust/Dockerfile .`. Its builder, on
 `rust:1.97.0-slim-bookworm` (the version `rust/rust-toolchain.toml` pins),
 runs the unit tests and compiles one binary from `Cargo.lock`'s exact
 dependencies, with the migrations and assets of `src/` built in; its runtime,
@@ -37,8 +38,8 @@ on `debian:bookworm-slim`, holds that binary alone, owned by root and run as
 `nobody`. `auth` is the server, `auth cli <command>` the break-glass CLI, and
 `auth healthcheck` what its `HEALTHCHECK` runs. Everything else in this
 document holds for both images: the environment, health, stopping, the
-database and the network. CD publishes both images of every release, as
-tags of one Docker Hub repository (§2).
+database and the network. A deployment that wants the Bun image builds it:
+`docker build .`.
 
 **Health.** `HEALTHCHECK` runs `GET /healthz` every 30 seconds. It answers
 200 when the database answers within two seconds, and 503 otherwise. At
@@ -49,7 +50,8 @@ waits for it rather than exiting.
 
 **Stopping.** On SIGTERM the server stops accepting connections, finishes
 the requests in flight, closes its database pool and exits 0. The `CMD` is
-in exec form, so `bun` is PID 1 and receives the signal. CI's `image` job
+in exec form, so the server (`auth`, or `bun` in the Bun image) is PID 1 and
+receives the signal. CI's `image` job
 checks this on every PR: it starts the image with a services file, waits for
 its own `HEALTHCHECK` to report healthy, runs the CLI inside it, and stops
 it. The `rust-image` job does the same for the Rust server's image.
@@ -57,30 +59,22 @@ it. The `rust-image` job does the same for the Rust server's image.
 ## 2. Releases
 
 1. A PR merges to `main`.
-2. CI runs on the push. Once it passes, CD builds both images of `main`'s
-   tip and pushes them to one Docker Hub repository, `<namespace>/auth` (the
-   namespace is the account the CD secrets below name): the Bun server's as
-   `latest` and `sha-<short sha>`, the Rust server's as `rust` and
-   `rust-sha-<short sha>`. It records each image's digest in the run's
-   summary.
+2. CI runs on the push. Once it passes, CD builds the Rust server's image of
+   `main`'s tip (`rust/Dockerfile`), pushes it to Docker Hub as
+   `<namespace>/auth:latest` and `<namespace>/auth:sha-<short sha>`
+   (the namespace is the account the CD secrets below name), and records the
+   image digest in the run's summary.
 3. When the repository has a `DEPLOY_URL` secret, CD then POSTs
-   `{"sha", "digest", "repo", "implementation"}` to it, with
-   `Authorization: Bearer <DEPLOY_SECRET>`, and waits for the answer.
-   `implementation` is the server the repository's `DEPLOY_IMPLEMENTATION`
-   variable names, `bun` (the default, when it isn't set) or `rust`, and
-   `digest` is that server's image, which this run just pushed. Any other
-   value of the variable fails the run before the hook is called. A refused or cut connection, 409, 502 and 504 are retried a
+   `{"sha", "digest", "repo"}` to it, `digest` being the image it just
+   pushed, with `Authorization: Bearer <DEPLOY_SECRET>`, and waits for the
+   answer. A refused or cut connection, 409, 502 and 504 are retried a
    minute apart, up to 10 tries; any other answer than 2xx fails the run.
    Only the status is printed, never the URL or the response. Without
    `DEPLOY_URL`, CD stops after publishing.
 
 **The deploy hook.** What CD expects of the endpoint behind `DEPLOY_URL`:
 
-- It deploys `<namespace>/auth@<digest>`, the image this run built, of
-  either server: both are in that one repository. `implementation` is there
-  for what a hook sets per server, such as its memory limit
-  (`docs/DESIGN.md` §16); the image itself holds its command and health
-  check. A hook
+- It deploys `<namespace>/auth@<digest>`, the image this run built. A hook
   that pulls `latest` instead runs whatever the tag holds when it pulls, so
   anyone who can push to the namespace can put an image there; for that
   deployment, the Docker Hub credential is as sensitive as the right to
@@ -104,15 +98,18 @@ A deployment chooses how releases reach it (`docs/DESIGN.md` §11):
   upgrades by moving the pin in its own configuration, where it reviews the
   change. A push to this repository can't reach it on its own.
 
-**Moving between the servers.** Each release publishes both images from one
-commit, so moving from one server to the other changes the code that runs and
-nothing else, and either way the database stays as it is (`docs/DESIGN.md`
-§16). Check the deployment against §16's list of what differs first: some
-`DATABASE_URL` parameters, the TLS certificates Postgres presents, a `.env`
-file, and the CLI's name in runbooks. Following releases, set
-`DEPLOY_IMPLEMENTATION` to `rust`; the next release CD deploys is the Rust
-server's image, and setting it back to `bun` moves the next one back. Pinned,
-move the pin to the other image's digest from the same release.
+**From the Bun image to the Rust one.** Older `sha-<short sha>` tags hold
+the Bun server's image, so a deployment that ran one moves to the Rust
+server at its first release after them: following releases, at the next
+deploy; pinned, when it moves the pin. The database and the configuration
+stay as they are, and copies of either can serve side by side during the
+deploy (`docs/DESIGN.md` §16). Check the deployment against §16's list of
+what differs first: some `DATABASE_URL` parameters, the TLS certificate
+Postgres presents, a `.env` file (the Rust server reads none), the CLI's
+name in runbooks (`auth cli`, below), and the user the image runs as,
+`nobody` (65534), which must be able to read a mounted services file. To go
+back, pin the digest of an older `sha-<short sha>` tag, or build
+`Dockerfile`.
 
 **Rolling back.** Following releases, revert the change here, which
 releases and deploys the code before it, or pin the previous digest until a
@@ -125,8 +122,7 @@ in the file, or their apps stop signing people in.
 CD's repository secrets: `DOCKER_HUB_USERNAME`, and `DOCKER_HUB_ACCESS_TOKEN`,
 a Docker Hub access token that can push to the `auth` repository; and, to
 deploy, `DEPLOY_URL` and `DEPLOY_SECRET`, the deployment's hook and its
-bearer token. Its repository variable, `DEPLOY_IMPLEMENTATION`, is not
-secret.
+bearer token.
 
 ## 3. What the runtime needs
 
@@ -219,13 +215,14 @@ copy.
 
 ### First admin and client secrets
 
-Run the CLI inside a running container (`docker exec <container> bun cli.ts
-…`). Every change it makes to users, access, secrets, encryption or imported
-data is audited as `host-cli` and alerted. Every command but `help` applies
-pending migrations first, which is neither audited nor alerted.
+Run the CLI inside a running container (`docker exec <container> auth cli
+…`; in the Bun image, `bun cli.ts …`). Every change it makes to users,
+access, secrets, encryption or imported data is audited as `host-cli` and
+alerted. Every command but `help` applies pending migrations first, which is
+neither audited nor alerted.
 
 ```sh
-bun cli.ts user create --username alice --email alice@example.com --access auth:admin
+auth cli user create --username alice --email alice@example.com --access auth:admin
 ```
 
 It emails an activation link (add `--print-link` to print it instead when
@@ -235,10 +232,10 @@ services from there.
 
 A registered service's confidential client gets its secret on the admin
 page; a services file client gets its secret from
-`bun cli.ts client secret wiki`, which prints it once (the CLI makes either
+`auth cli client secret wiki`, which prints it once (the CLI makes either
 kind). To rotate one, make a new one, move the app to it, then retire the
 old one: **Retire older** on the admin page, or
-`bun cli.ts client retire-old-secrets wiki`.
+`auth cli client retire-old-secrets wiki`.
 
 ### Rotating the encryption key
 
@@ -252,10 +249,10 @@ made with `openssl rand -base64 32`:
 2. Set `AUTH_ENCRYPTION_KEY=v2:<new key>` and
    `AUTH_DECRYPTION_KEYS=v1:<old key>`, and deploy. New secrets are written
    under version 2.
-3. Run `bun cli.ts encryption reencrypt` in a running container. It rewrites
+3. Run `auth cli encryption reencrypt` in a running container. It rewrites
    every TOTP secret and private signing key under version 2, and lists any
    value no configured key reads (it exits 1 then, and leaves the value as it
-   was). `bun cli.ts encryption status` should then show only `v2`.
+   was). `auth cli encryption status` should then show only `v2`.
 4. Remove `AUTH_DECRYPTION_KEYS` and deploy. Keep the old key offline for as
    long as you keep backups taken before step 3: restoring one needs it.
 
@@ -270,9 +267,9 @@ read JSON Lines, one object per line, from a file in the container or from
 standard input (`-`), so a file on the operator's machine can be piped in:
 
 ```sh
-docker exec -i <container> bun cli.ts import users - --dry-run < users.jsonl
-docker exec -i <container> bun cli.ts import users - < users.jsonl
-docker exec -i <container> bun cli.ts import api-keys --service tasks - < keys.jsonl
+docker exec -i <container> auth cli import users - --dry-run < users.jsonl
+docker exec -i <container> auth cli import users - < users.jsonl
+docker exec -i <container> auth cli import api-keys --service tasks - < keys.jsonl
 ```
 
 - **Users:** `{"username", "email", "name"?, "email_verified"?, "password_hash"?, "access"?: {"<service>": "<role>"}}`.
@@ -353,7 +350,7 @@ service keeps nothing in memory that another copy needs (`docs/DESIGN.md`
 ## 4. Settings of this repository
 
 - **A branch ruleset on `main`:** changes only by pull request, code-owner
-  review required (`.github/CODEOWNERS`), the `check` and `image` CI jobs
-  required, no force pushes.
+  review required (`.github/CODEOWNERS`), the `check`, `image`, `rust` and
+  `rust-image` CI jobs required, no force pushes.
 - **Private vulnerability reporting on** (`SECURITY.md`).
-- **The CD secrets and the `DEPLOY_IMPLEMENTATION` variable** from §2.
+- **The CD secrets** from §2.
