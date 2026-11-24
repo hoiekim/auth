@@ -308,10 +308,12 @@ async fn answer(app: App, router: Arc<Router>, peer: SocketAddr, req: hyper::Req
     let peer_ip = peer.ip().to_canonical().to_string();
     let ip = client_ip(Some(&peer_ip), (!real_ip.is_empty()).then(|| real_ip.join(", ")).as_deref(), &app.config.trusted_proxies);
 
-    // A body framed only one way: chunked alone, once, without a length.
-    // Anything else is how one reader can be told apart from another.
+    // A body framed only one way: chunked alone, once. Anything else is how
+    // one reader can be told apart from another. A Content-Length beside
+    // chunked never reaches here: hyper drops it, reads the body chunked and
+    // closes the connection after answering (DESIGN §16).
     let encodings: Vec<&str> = headers.iter().filter(|(n, _)| n == "transfer-encoding").map(|(_, v)| v.as_str()).collect();
-    if !encodings.is_empty() && (encodings.len() > 1 || !encodings[0].trim().eq_ignore_ascii_case("chunked") || header("content-length").is_some()) {
+    if !encodings.is_empty() && (encodings.len() > 1 || !encodings[0].trim().eq_ignore_ascii_case("chunked")) {
         return Ok(refuse(400));
     }
 
