@@ -799,7 +799,7 @@ CREATE UNLOGGED TABLE throttle (                      -- shared across every cop
   - **Rotating the key** takes four deploys, so two copies running side by side can always read what the other writes:
     1. Add the new key to `AUTH_DECRYPTION_KEYS`. Every copy can now read it.
     2. Make it `AUTH_ENCRYPTION_KEY`, and move the old one to `AUTH_DECRYPTION_KEYS`.
-    3. Run `bun cli.ts encryption reencrypt`, which rewrites every TOTP secret and private signing key under the new key. `bun cli.ts encryption status` then shows none left under the old one.
+    3. Run `auth cli encryption reencrypt`, which rewrites every TOTP secret and private signing key under the new key. `auth cli encryption status` then shows none left under the old one.
     4. Remove the old key. Keep it offline for as long as backups taken before step 3 are kept.
 
     CSRF tokens and the short-lived sealed values handed to browsers (§9.2) are derived from the key; each is accepted under any configured key, so a rotation signs nobody out.
@@ -856,16 +856,16 @@ Counters live in the `throttle` table, so every copy shares them and a restart d
 
 **Keep the tools that repair auth outside it.** A deployment's deploy pipeline must not need an auth sign-in, or a broken auth release couldn't deploy its own fix. At least one way into its monitoring and logs must also work without auth, or an auth outage couldn't even be seen.
 
-**Break-glass CLI**, run inside a running auth container by whoever can reach it, so it works whichever copy is up:
+**Break-glass CLI**, run inside a running auth container by whoever can reach it, so it works whichever copy is up. It is `auth cli` in the published image, and `bun cli.ts` in the Bun server's (§16):
 
 ```sh
-bun cli.ts user create --username alice --email alice@example.com --access auth:admin
-bun cli.ts user create --username mailer --bot --owner alice --access mailbox:user   # a bot user (A9)
-bun cli.ts user clear-mfa alice
-bun cli.ts client secret wiki        # prints a new secret once
-bun cli.ts encryption status         # rows per encryption key version (§9.3)
-bun cli.ts help                      # also: user disable / enable / reset-link, client retire-old-secrets,
-                                     # encryption reencrypt, import users / api-keys (§12.5, §13), migrate
+auth cli user create --username alice --email alice@example.com --access auth:admin
+auth cli user create --username mailer --bot --owner alice --access mailbox:user   # a bot user (A9)
+auth cli user clear-mfa alice
+auth cli client secret wiki        # prints a new secret once
+auth cli encryption status         # rows per encryption key version (§9.3)
+auth cli help                      # also: user disable / enable / reset-link, client retire-old-secrets,
+                                   # encryption reencrypt, import users / api-keys (§12.5, §13), migrate
 ```
 
 Every change the CLI makes to users, access, client secrets, encryption or imported data is audited as `host-cli` and posted to the alert webhook, if one is configured. Before any command but `help` and `migrate`, the CLI applies pending migrations and rotates a signing key that is due, as the server does at start; `migrate` only applies the migrations. Neither is audited or alerted.
@@ -948,7 +948,7 @@ For IMAP, SMTP, CalDAV, WebDAV and the like:
 ### 12.5 API keys for an app's API
 
 - **The app checks a `Bearer` key with `auth.introspect`**, and gets back its owner, the owner's current role on the service, and the key's scopes. It authorizes the request by both: a scope grants only what the role also allows, so a key loses power when its owner is moved to a lower role (rule 3). The service declares its scopes in its definition (§6).
-- **An app with its own key table can move it into auth:** copy each key's hash, scopes, expiry and revocation into `credentials`, with its owner mapped through `auth_sub`. When the old hashes are SHA-256 of the full key, introspection finds them by hash, so **existing keys keep working without reissue**. The CLI does the copy: `bun cli.ts import api-keys --service <name> <file>` reads one JSON object per line, `{"owner", "sha256", "scopes", "name"?, "expires_at"?, "revoked_at"?, "created_at"?, "last_used_at"?}`, where `owner` is the user's `sub` or username and `sha256` is the key's hash in hex or base64. Each owner must already hold a role on the service.
+- **An app with its own key table can move it into auth:** copy each key's hash, scopes, expiry and revocation into `credentials`, with its owner mapped through `auth_sub`. When the old hashes are SHA-256 of the full key, introspection finds them by hash, so **existing keys keep working without reissue**. The CLI does the copy: `auth cli import api-keys --service <name> <file>` reads one JSON object per line, `{"owner", "sha256", "scopes", "name"?, "expires_at"?, "revoked_at"?, "created_at"?, "last_used_at"?}`, where `owner` is the user's `sub` or username and `sha256` is the key's hash in hex or base64. Each owner must already hold a role on the service.
 
 ### 12.6 An app with resources inside it, and its own members
 
@@ -998,7 +998,7 @@ An app that sends mail through a mail server, or a job that writes to another ap
 4. **Password-only protocols:** users create app passwords, and then a cutover date turns off the old local passwords.
 5. **Clean up:** remove local sign-in code, password columns and flags, one release after nothing has used the fallbacks (the app's own count of local sign-ins is 0).
 
-**Moving existing users.** For a handful of people, create their accounts with the CLI and let auth email each one an activation link (set a password, enroll TOTP). That is simpler and safer than importing hashes. For more users, import their existing password hashes as a one-off: `Bun.password.verify` reads argon2id and bcrypt PHC strings and re-hashes to argon2id at the first sign-in. Note that bcrypt reads only the first 72 bytes of a password, and some apps truncate before hashing; an import has to verify the way the source app hashed, so a bcrypt hash is verified against the first 72 bytes. An imported hash is verified at its own cost until that first sign-in, behind the same hashing slot, so only hashes within §9.1's budget are taken: argon2id, argon2i or argon2d with at most m = 19 MiB, t = 3 and p = 4, or bcrypt with a cost of at most 12. A hash that costs more is refused, like any other problem; left out of the line, it gives its user an activation link instead. `bun cli.ts import users <file>` reads one JSON object per line, `{"username", "email", "name"?, "email_verified"?, "password_hash"?, "access"?: {"<service>": "<role>"}}`. A user without a password hash gets an activation link, as with `user create`.
+**Moving existing users.** For a handful of people, create their accounts with the CLI and let auth email each one an activation link (set a password, enroll TOTP). That is simpler and safer than importing hashes. For more users, import their existing password hashes as a one-off: `Bun.password.verify` reads argon2id and bcrypt PHC strings and re-hashes to argon2id at the first sign-in. Note that bcrypt reads only the first 72 bytes of a password, and some apps truncate before hashing; an import has to verify the way the source app hashed, so a bcrypt hash is verified against the first 72 bytes. An imported hash is verified at its own cost until that first sign-in, behind the same hashing slot, so only hashes within §9.1's budget are taken: argon2id, argon2i or argon2d with at most m = 19 MiB, t = 3 and p = 4, or bcrypt with a cost of at most 12. A hash that costs more is refused, like any other problem; left out of the line, it gives its user an activation link instead. `auth cli import users <file>` reads one JSON object per line, `{"username", "email", "name"?, "email_verified"?, "password_hash"?, "access"?: {"<service>": "<role>"}}`. A user without a password hash gets an activation link, as with `user create`.
 
 Both imports are all or nothing: every line is checked first, every problem is listed by line number without echoing a hash, and nothing is written unless all pass. An import takes at most 10,000 lines and 8 MB, and an owner holds at most 100 live API keys, as when they create their own. `--dry-run` stops after the checks, and `-` in place of the file reads standard input, so a file on the operator's machine can be piped into `docker exec -i`. Each imported row is audited as `host-cli`.
 
